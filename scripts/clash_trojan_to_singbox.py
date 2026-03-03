@@ -1,17 +1,52 @@
 #!/usr/bin/env python3
 """
-Clash Trojan → sing-box converter.
-Extracts Trojan proxy nodes from a Clash YAML config and injects them
-into a sing-box JSON template according to its filter rules.
+Clash Trojan -> sing-box converter.
+Extracts Trojan nodes from a Clash YAML config and injects them into a
+sing-box JSON template, expanding {all} placeholders with filter rules.
+
+Usage examples:
+  python clash_trojan_to_singbox.py clash.yaml
+  python clash_trojan_to_singbox.py clash.yaml -o output.json
+  python clash_trojan_to_singbox.py clash.yaml -t template.json
+  python clash_trojan_to_singbox.py clash.yaml -t https://example.com/t.json -o result.json
 """
-import json, re, sys, yaml, urllib.request, os, argparse
+
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.request
+
+import yaml
+
+TEMPLATE_URL = (
+    "https://raw.githubusercontent.com/tensornull/ProxyConfig"
+    "/main/sing-box/country-select-macos.json"
+)
+
+
+# Fix incorrect flag emoji in node names (e.g. provider uses 🇨🇳 for Taiwan)
+FLAG_FIXES = {
+    re.compile(r"TW|tw|台湾|臺灣|台|Taiwan"): "🇹🇼",
+}
+
+
+def fix_flag(name):
+    """Replace wrong flag emoji at the start of a node name."""
+    for pattern, correct_flag in FLAG_FIXES.items():
+        if pattern.search(name):
+            # Strip existing regional indicator pair (flag) at the start
+            if len(name) >= 2 and all(0x1F1E6 <= ord(c) <= 0x1F1FF for c in name[:2]):
+                return correct_flag + name[2:]
+    return name
 
 
 def convert_trojan(proxy):
-    """Convert a single Clash Trojan proxy entry to a sing-box outbound."""
+    """Convert a Clash Trojan proxy to a sing-box outbound dict."""
     ob = {
         "type": "trojan",
-        "tag": proxy["name"],
+        "tag": fix_flag(proxy["name"]),
         "server": proxy["server"],
         "server_port": int(proxy["port"]),
         "password": proxy["password"],
@@ -20,41 +55,46 @@ def convert_trojan(proxy):
             "insecure": proxy.get("skip-cert-verify", False),
         },
     }
+
     if proxy.get("sni"):
         ob["tls"]["server_name"] = proxy["sni"]
-    alpn = proxy.get("alpn")
-    if alpn:
+    if proxy.get("alpn"):
+        alpn = proxy["alpn"]
         ob["tls"]["alpn"] = alpn if isinstance(alpn, list) else [alpn]
-    fp = proxy.get("client-fingerprint")
-    if fp:
-        ob["tls"]["utls"] = {"enabled": True, "fingerprint": fp}
+    if proxy.get("client-fingerprint"):
+        ob["tls"]["utls"] = {
+            "enabled": True,
+            "fingerprint": proxy["client-fingerprint"],
+        }
 
     net = proxy.get("network", "tcp")
     if net == "ws":
-        ws_opts = proxy.get("ws-opts", {})
+        ws = proxy.get("ws-opts", {})
         ob["transport"] = {
             "type": "ws",
-            "path": ws_opts.get("path", "/"),
-            "headers": ws_opts.get("headers", {}),
+            "path": ws.get("path", "/"),
+            "headers": ws.get("headers", {}),
         }
     elif net == "grpc":
-        grpc_opts = proxy.get("grpc-opts", {})
+        grpc = proxy.get("grpc-opts", {})
         ob["transport"] = {
             "type": "grpc",
-            "service_name": grpc_opts.get("grpc-service-name", ""),
+            "service_name": grpc.get("grpc-service-name", ""),
         }
+
     return ob
 
 
-def apply_filters(node_tags, filters):
-    """Filter node tags using include/exclude keyword rules from the template."""
-    result = list(node_tags)
+def apply_filters(tags, filters):
+    """Apply include/exclude keyword filters to a list of node tags."""
+    result = list(tags)
     for f in filters:
-        action = f.get("action", "")
         keywords = f.get("keywords", [])
         if not keywords:
             continue
-        pattern = re.compile("|".join(re.escape(k) for k in keywords))
+        # Keywords are joined by | inside a single string, so flatten them
+        pattern = re.compile("|".join(keywords))
+        action = f.get("action", "")
         if action == "include":
             result = [t for t in result if pattern.search(t)]
         elif action == "exclude":
@@ -62,121 +102,81 @@ def apply_filters(node_tags, filters):
     return result
 
 
-def main():
-    default_template = (
-        "https://raw.githubusercontent.com/tensornull/ProxyConfig"
-        "/main/sing-box/country-select-macos.json"
-    )
+def load_json(source):
+    """Load JSON from a URL or local file path."""
+    if source.startswith("http"):
+        with urllib.request.urlopen(source, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    with open(source, "r", encoding="utf-8") as f:
+        return json.load(f)
 
+
+def inject_nodes(template, all_tags):
+    """Expand {all} placeholders in selector/urltest outbounds with node tags."""
+    outbounds = []
+    for ob in template.get("outbounds", []):
+        if ob.get("type") in ("selector", "urltest"):
+            filters = ob.pop("filter", [])
+            expanded = []
+            for item in ob.get("outbounds", []):
+                if (
+                    isinstance(item, str)
+                    and item.startswith("{")
+                    and item.endswith("}")
+                ):
+                    expanded.extend(apply_filters(all_tags, filters))
+                else:
+                    expanded.append(item)
+            ob["outbounds"] = expanded or ["direct"]
+        outbounds.append(ob)
+    return outbounds
+
+
+def main():
     parser = argparse.ArgumentParser(
-        description="Convert Clash Trojan proxies to sing-box JSON config"
+        description="Convert Clash Trojan proxies to sing-box JSON",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+examples:
+  python %(prog)s clash.yaml
+  python %(prog)s clash.yaml -o output.json
+  python %(prog)s clash.yaml -t template.json
+  python %(prog)s clash.yaml -t https://example.com/t.json -o result.json""",
     )
-    parser.add_argument("input", help="Path to Clash YAML config file")
+    parser.add_argument("input", help="Clash YAML config file")
     parser.add_argument(
-        "-t", "--template",
-        default=default_template,
-        help="Template URL or file path (default: country-select-macos.json)",
+        "-t", "--template", default=TEMPLATE_URL, help="Template URL or path"
     )
     parser.add_argument(
-        "-o", "--output",
-        default=None,
-        help="Output file path (default: <input>-singbox.json)",
+        "-o", "--output", help="Output path (default: <input>-singbox.json)"
     )
     args = parser.parse_args()
 
-    clash_file = args.input
-    template_source = args.template
-    output_file = args.output
-
-    # 1. Read Clash config
-    print(f"Reading Clash config: {clash_file}")
-    with open(clash_file, "r", encoding="utf-8") as f:
+    # Read Clash config
+    with open(args.input, "r", encoding="utf-8") as f:
         clash = yaml.safe_load(f)
     proxies = clash.get("proxies", [])
-    print(f"  Found {len(proxies)} proxies")
 
-    # 2. Convert Trojan nodes (skip non-trojan)
+    # Convert Trojan nodes only
     nodes = []
     for p in proxies:
-        if p.get("type") != "trojan":
-            print(
-                f"  [skip] unsupported protocol: {p.get('type', '?')} "
-                f"({p.get('name', '?')})",
-                file=sys.stderr,
-            )
-            continue
-        nodes.append(convert_trojan(p))
-    print(f"  Converted {len(nodes)} Trojan nodes")
+        if p.get("type") == "trojan":
+            nodes.append(convert_trojan(p))
+        else:
+            print(f"[skip] {p.get('type', '?')}: {p.get('name', '?')}", file=sys.stderr)
+
     all_tags = [n["tag"] for n in nodes]
+    print(f"Converted {len(nodes)}/{len(proxies)} proxies (Trojan only)")
 
-    # 3. Load template
-    print(f"Loading template: {template_source}")
-    if template_source.startswith("http"):
-        req = urllib.request.Request(
-            template_source, headers={"User-Agent": "Mozilla/5.0"}
-        )
-        resp = urllib.request.urlopen(req, timeout=15)
-        template = json.loads(resp.read().decode("utf-8"))
-    else:
-        with open(template_source, "r", encoding="utf-8") as f:
-            template = json.load(f)
+    # Load template and inject nodes
+    template = load_json(args.template)
+    template["outbounds"] = inject_nodes(template, all_tags) + nodes
 
-    # 4. Inject nodes into template outbounds
-    print("Injecting nodes into template...")
-    final_outbounds = []
-    for ob in template.get("outbounds", []):
-        if ob.get("type") not in ("selector", "urltest"):
-            final_outbounds.append(ob)
-            continue
-
-        raw_outbounds = ob.get("outbounds", [])
-        filters = ob.get("filter", [])
-        new_outbounds = []
-
-        for item in raw_outbounds:
-            if isinstance(item, str) and item.startswith("{") and item.endswith("}"):
-                # Placeholder like {all} — replace with matched nodes
-                matched = apply_filters(all_tags, filters)
-                new_outbounds.extend(matched)
-            else:
-                new_outbounds.append(item)
-
-        if not new_outbounds:
-            new_outbounds = ["direct"]
-
-        ob["outbounds"] = new_outbounds
-        ob.pop("filter", None)  # sing-box doesn't recognise this field
-        tag = ob.get("tag", "?")
-        # Count actual proxy nodes injected (exclude well-known group tags)
-        non_group = [
-            o for o in new_outbounds
-            if o not in {
-                "direct", "\U0001f1ed\U0001f1f0 Hong Kong",
-                "\U0001f1f9\U0001f1fc Taiwan",
-                "\U0001f1f8\U0001f1ec Singapore",
-                "\U0001f1fa\U0001f1f8 America",
-                "\U0001f6e9\ufe0f NodeSelected",
-                "\U0001f440 ForeignMedia", "\U0001f34e Apple",
-                "\u24c2\ufe0f Microsoft", "\U0001f310 Google",
-                "\U0001f3af Foreign", "\U0001f1e8\U0001f1f3 China",
-                "\U0001f916 AI", "\U0001f62e\u200d\U0001f4a8 Final",
-            }
-        ]
-        if non_group:
-            print(f"  {tag}: injected {len(non_group)} nodes")
-        final_outbounds.append(ob)
-
-    final_outbounds.extend(nodes)
-    template["outbounds"] = final_outbounds
-
-    # 5. Write output
-    result = json.dumps(template, indent=2, ensure_ascii=False)
-    if not output_file:
-        output_file = os.path.splitext(clash_file)[0] + "-singbox.json"
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(result)
-    print(f"\nSaved to: {output_file}")
-    print(f"Done — {len(nodes)} Trojan proxy nodes converted.")
+    # Write output
+    output = args.output or os.path.splitext(args.input)[0] + "-singbox.json"
+    with open(output, "w", encoding="utf-8") as f:
+        json.dump(template, f, indent=2, ensure_ascii=False)
+    print(f"Saved to: {output}")
 
 
 if __name__ == "__main__":

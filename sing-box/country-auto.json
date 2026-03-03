@@ -319,7 +319,7 @@
                 {
                     "action": "include",
                     "keywords": [
-                        "🇺🇸|US|us|美国|美|United States"
+                        "🇺🇸|(?<![A-Za-z])US(?![A-Za-z])|(?<![A-Za-z])us(?![A-Za-z])|美国|United States"
                     ]
                 }
             ]

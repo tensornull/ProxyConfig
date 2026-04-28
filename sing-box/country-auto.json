@@ -271,6 +271,12 @@
                     "keywords": [
                         "🇭🇰|HK|hk|香港|港|HongKong"
                     ]
+                },
+                {
+                    "action": "exclude",
+                    "keywords": [
+                        "(?i)bronze|silver"
+                    ]
                 }
             ]
         },
@@ -288,6 +294,12 @@
                     "action": "include",
                     "keywords": [
                         "🇹🇼|TW|tw|台湾|臺灣|台|Taiwan"
+                    ]
+                },
+                {
+                    "action": "exclude",
+                    "keywords": [
+                        "(?i)bronze|silver"
                     ]
                 }
             ]
@@ -307,6 +319,12 @@
                     "keywords": [
                         "🇸🇬|SG|sg|新加坡|狮|Singapore"
                     ]
+                },
+                {
+                    "action": "exclude",
+                    "keywords": [
+                        "(?i)bronze|silver"
+                    ]
                 }
             ]
         },
@@ -324,6 +342,12 @@
                     "action": "include",
                     "keywords": [
                         "🇺🇸|(?<![A-Za-z])US(?![A-Za-z])|(?<![A-Za-z])us(?![A-Za-z])|美国|United States"
+                    ]
+                },
+                {
+                    "action": "exclude",
+                    "keywords": [
+                        "(?i)bronze|silver"
                     ]
                 }
             ]

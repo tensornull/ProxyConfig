@@ -84,11 +84,6 @@
     ],
     "final": "dns_proxy"
   },
-  "http_clients": [
-    {
-      "tag": "rule-set-direct"
-    }
-  ],
   "inbounds": [
     {
       "type": "tun",
@@ -309,7 +304,6 @@
   "route": {
     "auto_detect_interface": true,
     "final": "😮‍💨 Final",
-    "default_http_client": "rule-set-direct",
     "default_domain_resolver": {
       "server": "dns_resolver",
       "strategy": "prefer_ipv4"

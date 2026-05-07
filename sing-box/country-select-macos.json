@@ -17,6 +17,12 @@
       "store_fakeip": false
     }
   },
+  "http_clients": [
+    {
+      "tag": "rule-set-download",
+      "detour": "😮‍💨 Final"
+    }
+  ],
   "dns": {
     "servers": [
       {
@@ -220,6 +226,7 @@
       "tag": "😮‍💨 Final",
       "type": "selector",
       "outbounds": [
+        "🛩️ NodeSelected",
         "direct",
         "🇭🇰 Hong Kong",
         "🇸🇬 Singapore",
@@ -234,7 +241,7 @@
           ]
         }
       ],
-      "default": "direct"
+      "default": "🛩️ NodeSelected"
     },
     {
       "tag": "🇭🇰 Hong Kong",
@@ -304,6 +311,7 @@
   "route": {
     "auto_detect_interface": true,
     "final": "😮‍💨 Final",
+    "default_http_client": "rule-set-download",
     "default_domain_resolver": {
       "server": "dns_resolver",
       "strategy": "prefer_ipv4"

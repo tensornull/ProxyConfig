@@ -65,7 +65,7 @@
             },
             {
                 "clash_mode": "global",
-                "server": "dns_proxy "
+                "server": "dns_proxy"
             },
             {
                 "process_name": [
@@ -81,7 +81,7 @@
             },
             {
                 "rule_set": "geosite-geolocation-!cn",
-                "server": "dns_proxy "
+                "server": "dns_proxy"
             },
             {
                 "rule_set": "geosite-category-ads-all",
@@ -104,7 +104,7 @@
             "mtu": 1500,
             "auto_route": true,
             "strict_route": false,
-            "endpoint_independent_nat": false,
+            "endpoint_independent_nat": true,
             "stack": "system",
             "platform": {
                 "http_proxy": {
@@ -380,20 +380,7 @@
                 "outbound": "🛩️ NodeSelected"
             },
             {
-                "type": "logical",
-                "mode": "or",
-                "rules": [
-                    {
-                        "port": 853
-                    },
-                    {
-                        "network": "udp",
-                        "port": 443
-                    },
-                    {
-                        "protocol": "stun"
-                    }
-                ],
+                "port": 853,
                 "action": "reject"
             },
             {

@@ -380,6 +380,10 @@
                 "outbound": "🛩️ NodeSelected"
             },
             {
+                "rule_set": "geosite-steam",
+                "outbound": "🛩️ NodeSelected"
+            },
+            {
                 "port": 853,
                 "action": "reject"
             },
@@ -507,6 +511,12 @@
                 "type": "remote",
                 "format": "binary",
                 "url": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/private.srs"
+            },
+            {
+                "tag": "geosite-steam",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/steam.srs"
             },
             {
                 "tag": "geosite-google",

@@ -225,6 +225,19 @@
       "default": "🇺🇸 America"
     },
     {
+      "tag": "🎮 Other",
+      "type": "selector",
+      "outbounds": [
+        "🛩️ NodeSelected",
+        "direct",
+        "🇭🇰 Hong Kong",
+        "🇹🇼 Taiwan",
+        "🇸🇬 Singapore",
+        "🇺🇸 America"
+      ],
+      "default": "🛩️ NodeSelected"
+    },
+    {
       "tag": "😮‍💨 Final",
       "type": "selector",
       "outbounds": [
@@ -332,7 +345,7 @@
       },
       {
         "rule_set": "geosite-steam",
-        "outbound": "🛩️ NodeSelected"
+        "outbound": "🎮 Other"
       },
       {
         "port": 853,

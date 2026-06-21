@@ -1,0 +1,4 @@
+interface:
+  display_name: "sing-box Subscription Conversion"
+  short_description: "Convert Clash YAML into sing-box configs."
+  default_prompt: "Use this skill to convert a Clash subscription into sing-box configs safely."

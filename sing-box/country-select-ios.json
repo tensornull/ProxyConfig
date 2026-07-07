@@ -48,15 +48,15 @@
     ],
     "rules": [
       {
+        "query_type": "AAAA",
         "rule_set": [
           "geosite-github",
           "geosite-google",
           "geosite-youtube",
           "geosite-microsoft"
         ],
-        "action": "route",
-        "server": "dns_proxy",
-        "strategy": "ipv4_only"
+        "action": "predefined",
+        "rcode": "NOERROR"
       },
       {
         "domain": [

@@ -48,6 +48,17 @@
         ],
         "rules": [
             {
+                "rule_set": [
+                    "geosite-github",
+                    "geosite-google",
+                    "geosite-youtube",
+                    "geosite-microsoft"
+                ],
+                "action": "route",
+                "server": "dns_proxy",
+                "strategy": "ipv4_only"
+            },
+            {
                 "domain": [
                     "ghproxy.com",
                     "cdn.jsdelivr.net",

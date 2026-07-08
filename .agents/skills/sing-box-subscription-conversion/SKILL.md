@@ -25,10 +25,20 @@ Use this skill for `ProxyConfig/sing-box` subscription conversion work.
 
 ## Validation
 
-- JSON parses cleanly.
-- Selector and urltest outbounds reference existing tags.
-- Defaults reference existing tags.
-- `geosite-steam` exists in both `route.rules` and `route.rule_set`, and its route rule points to the `🎮 Other` selector (which itself resolves to existing tags).
+- Run `scripts/validate_singbox_subscription.py` after changing `sing-box/*.json`.
+  Supply the real SFM final subscription URL via `--subscription-url` or
+  `SINGBOX_SUBSCRIPTION_URL`; local template validation alone is not sufficient.
+- The script must confirm JSON parsing, selector/urltest/default references,
+  DNS server references, route and DNS rule-set references, no global
+  `udp/443 reject`, and no deprecated `dns.rules[].strategy`.
+- The final subscription output must have `missing_refs == 0`,
+  `real_proxy_node_count > 0`, and real members in `🇭🇰 Hong Kong`,
+  `🇹🇼 Taiwan`, `🇸🇬 Singapore`, and `🇺🇸 America`.
+- `real_proxy_node_count == 0`, country selectors containing only `Proxy` or
+  `direct`, or a `Proxy` direct fallback are release-blocking failures.
+- If a matching `sing-box` CLI is available, the script strips SFM-only
+  `filter` fields into `.tmp` and runs `sing-box check`; any warning or
+  deprecated output is a failure.
 - Taiwan node names use the Taiwan flag when the name indicates Taiwan.
 - Stale provider hostnames are absent unless intentionally retained.
 

@@ -13,6 +13,19 @@ When converting a Clash YAML subscription into sing-box configs for testing unst
 - Fix Taiwan node names from a wrong China flag to `🇹🇼` when the name indicates Taiwan.
 - Keep all converted nodes as outbounds, even if only HK/JP/SG/TW/US are exposed through the main country selectors.
 - Preserve the Steam route fix: Steam is its own selector group. Add the `🎮 Other` selector outbound with members `["🛩️ NodeSelected", "direct", "🇭🇰 Hong Kong", "🇹🇼 Taiwan", "🇸🇬 Singapore", "🇺🇸 America"]` and `default` `🛩️ NodeSelected` (placed just before the `😮‍💨 Final` outbound), add one route rule `{ "rule_set": "geosite-steam", "outbound": "🎮 Other" }` near the top of `route.rules`, and add the remote `geosite-steam` rule-set using `https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/steam.srs`. (`🎮 Other` is the temporary name for the Steam group.)
-- Validate after generation: JSON parses cleanly, VS Code reports no JSON errors, selector/urltest outbounds and defaults reference existing tags, the `🎮 Other` selector exists and `geosite-steam` exists in both `route.rules` (routed to `🎮 Other`) and `route.rule_set`, Taiwan flags are corrected, and stale provider hostnames are absent unless intentionally retained.
+- Validate after generation with `scripts/validate_singbox_subscription.py`.
+  For any change under `sing-box/*.json`, local template checks are not enough:
+  supply the real SFM final subscription URL with `--subscription-url` or
+  `SINGBOX_SUBSCRIPTION_URL` so the script validates the converted output that
+  SFM actually consumes.
+- Release-blocking failures include: JSON parse errors, selector/urltest/default
+  references to missing tags, missing DNS or route rule-set references, global
+  `udp/443 reject`, deprecated `dns.rules[].strategy`, `real_proxy_node_count=0`
+  in the final subscription, or country selectors (`🇭🇰 Hong Kong`,
+  `🇹🇼 Taiwan`, `🇸🇬 Singapore`, `🇺🇸 America`) containing only `Proxy`, `direct`,
+  or no members.
+- Do not add or rely on a `Proxy` direct fallback to make SFM start. That masks
+  provider or subscription-conversion failures and can leave all country
+  selectors without real nodes.
 - Do not print proxy passwords or full node bodies in summaries; report only counts, group sizes, file paths, and validation status.
 - The local Python environment may lack PyYAML. Ruby's built-in `YAML` plus `JSON` is the reliable fallback for one-off conversions in this workspace.

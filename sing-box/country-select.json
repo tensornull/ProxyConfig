@@ -331,10 +331,6 @@
     },
     {
       "type": "direct",
-      "tag": "Proxy"
-    },
-    {
-      "type": "direct",
       "tag": "direct"
     }
   ],

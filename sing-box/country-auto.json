@@ -398,6 +398,10 @@
                 "action": "sniff"
             },
             {
+                "protocol": "quic",
+                "action": "reject"
+            },
+            {
                 "protocol": "dns",
                 "action": "hijack-dns"
             },

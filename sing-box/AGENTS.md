@@ -13,7 +13,8 @@ When converting a Clash YAML subscription into sing-box configs for testing unst
 - Fix Taiwan node names from a wrong China flag to `🇹🇼` when the name indicates Taiwan.
 - Keep all converted nodes as outbounds, even if only HK/JP/SG/TW/US are exposed through the main country selectors.
 - Preserve the Steam route fix: Steam is its own selector group. Add the `🎮 Other` selector outbound with members `["🛩️ NodeSelected", "direct", "🇭🇰 Hong Kong", "🇹🇼 Taiwan", "🇸🇬 Singapore", "🇺🇸 America"]` and `default` `🛩️ NodeSelected` (placed just before the `😮‍💨 Final` outbound), add one route rule `{ "rule_set": "geosite-steam", "outbound": "🎮 Other" }` near the top of `route.rules`, and add the remote `geosite-steam` rule-set using `https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/steam.srs`. (`🎮 Other` is the temporary name for the Steam group.)
-- Preserve the Safari/system-HTTP QUIC fallback fix immediately after the global sniff rule: `{ "protocol": "quic", "action": "reject" }`. Do not replace it with a global `udp/443 reject`.
+- Preserve the Safari/system-HTTP QUIC fallback after sniffing, but never place a bare `{ "protocol": "quic", "action": "reject" }` first. WeChat / `mp.weixin.qq.com` need QUIC exceptions first: geosite-cn, WeChat/Weixin/QQ process names, and weixin/qq suffixes must go to `🇨🇳 China` before the leftover QUIC reject. Do not replace this with a global `udp/443 reject`.
+- Keep ad blocking before `geosite-cn`: reject `geosite-category-ads-all` plus WeChat/GDT ad hosts (`wxsnsdy.wxs.qq.com`, `getappmsgad.mp.weixin.qq.com`, `gdt.qq.com`) at the top of both `dns.rules` and `route.rules`. A late ads reject after `geosite-cn` will never fire for domestic ad domains.
 - Validate after generation with `scripts/validate_singbox_subscription.py`.
   For any change under `sing-box/*.json`, local template checks are not enough:
   supply the real SFM final subscription URL with `--subscription-url` or

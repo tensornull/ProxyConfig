@@ -48,6 +48,34 @@
     ],
     "rules": [
       {
+        "rule_set": "geosite-category-ads-all",
+        "action": "reject"
+      },
+      {
+        "domain": [
+          "wxsnsdy.wxs.qq.com",
+          "wxsnsdythumb.wxs.qq.com",
+          "getappmsgad.mp.weixin.qq.com",
+          "adsmind.apdcdn.tc.qq.com",
+          "adsmind.gdtimg.com",
+          "adsmind.tc.qq.com",
+          "pgdt.gtimg.cn",
+          "pgdt.gtimg.com",
+          "pgdt.ugdtimg.com"
+        ],
+        "action": "reject"
+      },
+      {
+        "domain_suffix": [
+          "gdt.qq.com",
+          "e.qq.com",
+          "l.qq.com",
+          "adsfile.qq.com",
+          "ad.qun.qq.com"
+        ],
+        "action": "reject"
+      },
+      {
         "query_type": "AAAA",
         "rule_set": [
           "geosite-github",
@@ -93,10 +121,6 @@
       {
         "rule_set": "geosite-geolocation-!cn",
         "server": "dns_proxy"
-      },
-      {
-        "rule_set": "geosite-category-ads-all",
-        "action": "reject"
       }
     ],
     "final": "dns_proxy"
@@ -347,6 +371,61 @@
         "action": "sniff"
       },
       {
+        "domain": [
+          "wxsnsdy.wxs.qq.com",
+          "wxsnsdythumb.wxs.qq.com",
+          "getappmsgad.mp.weixin.qq.com",
+          "adsmind.apdcdn.tc.qq.com",
+          "adsmind.gdtimg.com",
+          "adsmind.tc.qq.com",
+          "pgdt.gtimg.cn",
+          "pgdt.gtimg.com",
+          "pgdt.ugdtimg.com"
+        ],
+        "action": "reject"
+      },
+      {
+        "domain_suffix": [
+          "gdt.qq.com",
+          "e.qq.com",
+          "l.qq.com",
+          "adsfile.qq.com",
+          "ad.qun.qq.com"
+        ],
+        "action": "reject"
+      },
+      {
+        "rule_set": "geosite-category-ads-all",
+        "action": "reject"
+      },
+      {
+        "protocol": "quic",
+        "rule_set": "geosite-cn",
+        "outbound": "🇨🇳 China"
+      },
+      {
+        "protocol": "quic",
+        "process_name": [
+          "WeChat",
+          "Weixin",
+          "QQ"
+        ],
+        "outbound": "🇨🇳 China"
+      },
+      {
+        "protocol": "quic",
+        "domain_suffix": [
+          "weixin.qq.com",
+          "wechat.com",
+          "servicewechat.com",
+          "qq.com",
+          "qpic.cn",
+          "gtimg.com",
+          "gtimg.cn"
+        ],
+        "outbound": "🇨🇳 China"
+      },
+      {
         "protocol": "quic",
         "action": "reject"
       },
@@ -383,10 +462,6 @@
           "43.162.0.0/16"
         ],
         "outbound": "direct"
-      },
-      {
-        "rule_set": "geosite-category-ads-all",
-        "action": "reject"
       },
       {
         "domain_keyword": "vercel.app",

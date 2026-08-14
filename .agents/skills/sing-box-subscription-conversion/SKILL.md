@@ -22,8 +22,8 @@ Use this skill for `ProxyConfig/sing-box` subscription conversion work.
    - Add the `🎮 Other` selector outbound: members `["🛩️ NodeSelected", "direct", "🇭🇰 Hong Kong", "🇹🇼 Taiwan", "🇸🇬 Singapore", "🇺🇸 America"]`, `default` `🛩️ NodeSelected` (placed just before `😮‍💨 Final`).
    - Add `{ "rule_set": "geosite-steam", "outbound": "🎮 Other" }` near the top of `route.rules`.
    - Add the remote `geosite-steam` rule-set URL from `sing-box/AGENTS.md`.
-9. Preserve the Safari/system-HTTP QUIC fallback fix immediately after the global sniff rule:
-   `{ "protocol": "quic", "action": "reject" }`. Do not use a global `udp/443 reject`.
+9. Preserve the Safari/system-HTTP QUIC fallback after sniffing, but do not put a bare `{ "protocol": "quic", "action": "reject" }` first. Keep WeChat / `mp.weixin.qq.com` exceptions before it: geosite-cn, WeChat/Weixin/QQ process names, and weixin/qq suffixes must go to `🇨🇳 China`. Do not use a global `udp/443 reject`.
+10. Keep ad blocking before `geosite-cn`: reject `geosite-category-ads-all` plus WeChat/GDT ad hosts at the top of both `dns.rules` and `route.rules`.
 
 ## Validation
 

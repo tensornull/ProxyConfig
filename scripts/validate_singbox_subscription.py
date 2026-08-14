@@ -180,6 +180,53 @@ def check_document(
         ):
             failures.append(f"{label}: global udp/443 reject rule is present")
 
+    first_quic_reject = next(
+        (
+            index
+            for index, rule in enumerate(route_rules)
+            if isinstance(rule, dict)
+            and rule.get("protocol") == "quic"
+            and rule.get("action") == "reject"
+            and "rule_set" not in rule
+            and "domain" not in rule
+            and "domain_suffix" not in rule
+            and "process_name" not in rule
+        ),
+        None,
+    )
+    if first_quic_reject is not None:
+        wechat_quic_bypass = any(
+            isinstance(rule, dict)
+            and rule.get("protocol") == "quic"
+            and rule.get("action") != "reject"
+            and (
+                "WeChat" in as_list(rule.get("process_name"))
+                or "weixin.qq.com" in as_list(rule.get("domain_suffix"))
+                or "geosite-cn" in as_list(rule.get("rule_set"))
+            )
+            for rule in route_rules[:first_quic_reject]
+        )
+        if not wechat_quic_bypass:
+            failures.append(
+                f"{label}: global quic reject is missing WeChat/geosite-cn bypass"
+            )
+
+    ads_reject_before_cn = False
+    saw_geosite_cn = False
+    for rule in dns_rules + route_rules:
+        if not isinstance(rule, dict):
+            continue
+        rule_sets = as_list(rule.get("rule_set"))
+        if "geosite-cn" in rule_sets and rule.get("action") != "reject":
+            saw_geosite_cn = True
+        if "geosite-category-ads-all" in rule_sets and rule.get("action") == "reject":
+            if not saw_geosite_cn:
+                ads_reject_before_cn = True
+    if not ads_reject_before_cn:
+        failures.append(
+            f"{label}: geosite-category-ads-all reject is missing or after geosite-cn"
+        )
+
     real_proxy_nodes = [
         ob
         for ob in outbounds

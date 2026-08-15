@@ -17,9 +17,9 @@ Use this skill for `ProxyConfig/sing-box` subscription conversion work.
    - `sing-box/.tmp/<provider>-select.json`
 5. Use the current known-good `.tmp` auto/select configs as the base so DNS, inbounds, route policy, Clash API, and local fixes stay intact.
 6. Convert only supported node types. For Clash `trojan`, map `port` to `server_port`, `skip-cert-verify` to `tls.insecure`, and `sni` to `tls.server_name`; preserve supported `ws` and `grpc` transport options.
-7. Preserve all converted nodes as outbounds, even when only HK/JP/SG/TW/US are exposed through main selectors.
+7. Preserve all converted nodes as outbounds. First-class country groups are HK/JP/SG/TW/US. Put `🇯🇵 Japan` on `🛩️ NodeSelected`, `⚡️ Auto` (auto template), policy selectors, and `😮‍💨 Final`. Auto may exclude `(?i)bronze|silver` for HK/SG/US only — never for `🇹🇼 Taiwan` or `🇯🇵 Japan`.
 8. Preserve the Steam route fix:
-   - Add the `🎮 Other` selector outbound: members `["🛩️ NodeSelected", "direct", "🇭🇰 Hong Kong", "🇹🇼 Taiwan", "🇸🇬 Singapore", "🇺🇸 America"]`, `default` `🛩️ NodeSelected` (placed just before `😮‍💨 Final`).
+   - Add the `🎮 Other` selector outbound: members `["🛩️ NodeSelected", "direct", "🇭🇰 Hong Kong", "🇹🇼 Taiwan", "🇸🇬 Singapore", "🇺🇸 America"]`, `default` `🛩️ NodeSelected` (placed just before `😮‍💨 Final`). Steam stays without `🇯🇵 Japan`.
    - Add `{ "rule_set": "geosite-steam", "outbound": "🎮 Other" }` near the top of `route.rules`.
    - Add the remote `geosite-steam` rule-set URL from `sing-box/AGENTS.md`.
 9. Preserve the Safari/system-HTTP QUIC fallback after sniffing, but do not put a bare `{ "protocol": "quic", "action": "reject" }` first. Keep WeChat / `mp.weixin.qq.com` exceptions before it: geosite-cn, WeChat/Weixin/QQ process names, and weixin/qq suffixes must go to `🇨🇳 China`. Do not use a global `udp/443 reject`.
@@ -35,7 +35,7 @@ Use this skill for `ProxyConfig/sing-box` subscription conversion work.
   `udp/443 reject`, and no deprecated `dns.rules[].strategy`.
 - The final subscription output must have `missing_refs == 0`,
   `real_proxy_node_count > 0`, and real members in `🇭🇰 Hong Kong`,
-  `🇹🇼 Taiwan`, `🇸🇬 Singapore`, and `🇺🇸 America`.
+  `🇯🇵 Japan`, `🇹🇼 Taiwan`, `🇸🇬 Singapore`, and `🇺🇸 America`.
 - `real_proxy_node_count == 0`, country selectors containing only `Proxy` or
   `direct`, or a `Proxy` direct fallback are release-blocking failures.
 - If a matching `sing-box` CLI is available, the script strips SFM-only

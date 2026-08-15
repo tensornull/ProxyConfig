@@ -26,6 +26,7 @@ DEFAULT_TEMPLATES = [
 ]
 COUNTRY_SELECTORS = [
     "🇭🇰 Hong Kong",
+    "🇯🇵 Japan",
     "🇹🇼 Taiwan",
     "🇸🇬 Singapore",
     "🇺🇸 America",

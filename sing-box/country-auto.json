@@ -81,7 +81,9 @@
                     "geosite-github",
                     "geosite-google",
                     "geosite-youtube",
-                    "geosite-microsoft"
+                    "geosite-microsoft",
+                    "geosite-openai",
+                    "geosite-anthropic"
                 ],
                 "action": "predefined",
                 "rcode": "NOERROR"

@@ -90,6 +90,7 @@
       },
       {
         "domain": [
+          "lggafw.com",
           "ghproxy.com",
           "cdn.jsdelivr.net",
           "testingcf.jsdelivr.net"
@@ -557,6 +558,7 @@
       },
       {
         "domain_keyword": [
+          "lggafw.com",
           "edu.cn",
           "worldquantbrain.com"
         ],

@@ -76,6 +76,13 @@
         "action": "reject"
       },
       {
+        "process_name": [
+          "WeChat",
+          "Weixin"
+        ],
+        "server": "dns_resolver"
+      },
+      {
         "query_type": "AAAA",
         "rule_set": [
           "geosite-github",
@@ -115,7 +122,6 @@
           "BaiduNetdisk",
           "ToDesk",
           "ToDesk_Service",
-          "WeChat",
           "QQ",
           "Tailscale"
         ],
@@ -398,6 +404,10 @@
         "action": "sniff"
       },
       {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
         "domain": [
           "wxsnsdy.wxs.qq.com",
           "wxsnsdythumb.wxs.qq.com",
@@ -426,15 +436,23 @@
         "action": "reject"
       },
       {
+        "process_name": [
+          "WeChat",
+          "Weixin"
+        ],
+        "outbound": "🇨🇳 China"
+      },
+      {
         "protocol": "quic",
-        "rule_set": "geosite-cn",
+        "rule_set": [
+          "geosite-cn",
+          "geoip-cn"
+        ],
         "outbound": "🇨🇳 China"
       },
       {
         "protocol": "quic",
         "process_name": [
-          "WeChat",
-          "Weixin",
           "QQ"
         ],
         "outbound": "🇨🇳 China"
@@ -442,11 +460,7 @@
       {
         "protocol": "quic",
         "domain_suffix": [
-          "weixin.qq.com",
-          "wechat.com",
-          "servicewechat.com",
           "qq.com",
-          "qpic.cn",
           "gtimg.com",
           "gtimg.cn"
         ],
@@ -455,10 +469,6 @@
       {
         "protocol": "quic",
         "action": "reject"
-      },
-      {
-        "protocol": "dns",
-        "action": "hijack-dns"
       },
       {
         "clash_mode": "global",
@@ -551,6 +561,10 @@
         "outbound": "👀 ForeignMedia"
       },
       {
+        "rule_set": "geosite-cn",
+        "outbound": "🇨🇳 China"
+      },
+      {
         "rule_set": [
           "geosite-geolocation-!cn"
         ],
@@ -565,12 +579,7 @@
         "outbound": "direct"
       },
       {
-        "domain_keyword": "cn",
-        "outbound": "🇨🇳 China"
-      },
-      {
         "rule_set": [
-          "geosite-cn",
           "geoip-cn",
           "geosite-feishu"
         ],

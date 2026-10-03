@@ -22,8 +22,9 @@ Use this skill for `ProxyConfig/sing-box` subscription conversion work.
    - Add the `🎮 Other` selector outbound: members `["🛩️ NodeSelected", "direct", "🇭🇰 Hong Kong", "🇹🇼 Taiwan", "🇸🇬 Singapore", "🇺🇸 America"]`, `default` `🛩️ NodeSelected` (placed just before `😮‍💨 Final`). Steam stays without `🇯🇵 Japan`.
    - Add `{ "rule_set": "geosite-steam", "outbound": "🎮 Other" }` near the top of `route.rules`.
    - Add the remote `geosite-steam` rule-set URL from `sing-box/AGENTS.md`.
-9. Preserve the Safari/system-HTTP QUIC fallback after sniffing, but do not put a bare `{ "protocol": "quic", "action": "reject" }` first. Keep WeChat / `mp.weixin.qq.com` exceptions before it: geosite-cn, WeChat/Weixin/QQ process names, and weixin/qq suffixes must go to `🇨🇳 China`. Do not use a global `udp/443 reject`.
-10. Keep ad blocking before `geosite-cn`: reject `geosite-category-ads-all` plus WeChat/GDT ad hosts at the top of both `dns.rules` and `route.rules`.
+9. Preserve the Safari/system-HTTP QUIC fallback after sniffing, but do not put a bare `{ "protocol": "quic", "action": "reject" }` first: `{ "protocol": "quic", "rule_set": ["geosite-cn", "geoip-cn"], "outbound": "🇨🇳 China" }` goes before it. Do not use a global `udp/443 reject`.
+10. No ad blocking, `process_name` rules, or hand-written per-app domain lists; rely on remote rule-sets. Never delete the user's own infrastructure rules, and keep `🇨🇳 China` selectable (see `sing-box/AGENTS.md`).
+11. Keep the verified IPv6 fix: route rule 0, before `sniff`, is `{ "ip_version": 6, "network": "tcp", "action": "reject", "no_drop": true }`, plus global `dns.strategy: "ipv4_only"`. Do not remove it or the TUN IPv6 prefix (see `sing-box/AGENTS.md`).
 
 ## Validation
 

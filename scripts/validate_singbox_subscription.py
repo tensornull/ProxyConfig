@@ -212,21 +212,53 @@ def check_document(
                 f"{label}: global quic reject is missing WeChat/geosite-cn bypass"
             )
 
-    ads_reject_before_cn = False
-    saw_geosite_cn = False
-    for rule in dns_rules + route_rules:
-        if not isinstance(rule, dict):
-            continue
-        rule_sets = as_list(rule.get("rule_set"))
-        if "geosite-cn" in rule_sets and rule.get("action") != "reject":
-            saw_geosite_cn = True
-        if "geosite-category-ads-all" in rule_sets and rule.get("action") == "reject":
-            if not saw_geosite_cn:
-                ads_reject_before_cn = True
-    if not ads_reject_before_cn:
-        failures.append(
-            f"{label}: geosite-category-ads-all reject is missing or after geosite-cn"
+    # The TUN carries an IPv6 prefix but there is no IPv6 egress: IPv6 TCP must be
+    # refused at pre-match (before sniff), otherwise apps connect, get reset, and
+    # only recover on retry over IPv4 (WeChat first-load failure, 2026-10-03).
+    tun_has_ipv6 = any(
+        isinstance(inbound, dict)
+        and inbound.get("type") == "tun"
+        and any(":" in str(addr) for addr in as_list(inbound.get("address")))
+        for inbound in doc.get("inbounds") or []
+    )
+    if tun_has_ipv6:
+        first_sniff = next(
+            (
+                index
+                for index, rule in enumerate(route_rules)
+                if isinstance(rule, dict) and rule.get("action") == "sniff"
+            ),
+            len(route_rules),
         )
+        if not any(
+            isinstance(rule, dict)
+            and rule.get("ip_version") == 6
+            and rule.get("network") in (None, "tcp")
+            and rule.get("action") == "reject"
+            and rule.get("no_drop") is True
+            for rule in route_rules[:first_sniff]
+        ):
+            failures.append(
+                f"{label}: tun has IPv6 but no pre-sniff ip_version=6 tcp reject (no_drop)"
+            )
+
+    # Ad blocking is optional (removed 2026-10-03); if present it must precede geosite-cn.
+    for scope, rules in (("dns", dns_rules), ("route", route_rules)):
+        saw_geosite_cn = False
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            rule_sets = as_list(rule.get("rule_set"))
+            if "geosite-cn" in rule_sets and rule.get("action") != "reject":
+                saw_geosite_cn = True
+            if (
+                "geosite-category-ads-all" in rule_sets
+                and rule.get("action") == "reject"
+                and saw_geosite_cn
+            ):
+                failures.append(
+                    f"{label}: {scope} geosite-category-ads-all reject is after geosite-cn"
+                )
 
     real_proxy_nodes = [
         ob
@@ -351,10 +383,27 @@ def fetch_subscription(url: str, output_path: Path) -> dict[str, Any]:
         url,
         headers={"User-Agent": "ProxyConfig-Validation/1.0"},
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with build_subscription_opener().open(request, timeout=30) as response:
         body = response.read()
     output_path.write_bytes(body)
     return load_json(output_path)
+
+
+class Redirect308Handler(urllib.request.HTTPRedirectHandler):
+    """Treat provider CDN 308 redirects like safe GET redirects on Python 3.9."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # urllib's Python 3.9 handler does not dispatch 308 itself. Reuse its
+        # normal redirect validation and method handling, changing only the code.
+        return super().redirect_request(
+            req, fp, 307 if code == 308 else code, msg, headers, newurl
+        )
+
+    http_error_308 = urllib.request.HTTPRedirectHandler.http_error_302
+
+
+def build_subscription_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(Redirect308Handler())
 
 
 def parse_args() -> argparse.Namespace:

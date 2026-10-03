@@ -33,13 +33,6 @@
         "detour": "🛩️ NodeSelected"
       },
       {
-        "tag": "dns_direct",
-        "type": "https",
-        "server": "sm2.doh.pub",
-        "server_port": 443,
-        "domain_resolver": "dns_resolver"
-      },
-      {
         "tag": "dns_resolver",
         "type": "udp",
         "server": "119.29.29.29",
@@ -47,55 +40,6 @@
       }
     ],
     "rules": [
-      {
-        "rule_set": "geosite-category-ads-all",
-        "action": "reject"
-      },
-      {
-        "domain": [
-          "wxsnsdy.wxs.qq.com",
-          "wxsnsdythumb.wxs.qq.com",
-          "getappmsgad.mp.weixin.qq.com",
-          "adsmind.apdcdn.tc.qq.com",
-          "adsmind.gdtimg.com",
-          "adsmind.tc.qq.com",
-          "pgdt.gtimg.cn",
-          "pgdt.gtimg.com",
-          "pgdt.ugdtimg.com"
-        ],
-        "action": "reject"
-      },
-      {
-        "domain_suffix": [
-          "gdt.qq.com",
-          "e.qq.com",
-          "l.qq.com",
-          "adsfile.qq.com",
-          "ad.qun.qq.com"
-        ],
-        "action": "reject"
-      },
-      {
-        "query_type": "AAAA",
-        "rule_set": [
-          "geosite-github",
-          "geosite-google",
-          "geosite-youtube",
-          "geosite-microsoft",
-          "geosite-openai",
-          "geosite-anthropic"
-        ],
-        "action": "predefined",
-        "rcode": "NOERROR"
-      },
-      {
-        "domain": [
-          "ghproxy.com",
-          "cdn.jsdelivr.net",
-          "testingcf.jsdelivr.net"
-        ],
-        "server": "dns_resolver"
-      },
       {
         "rule_set": "geosite-cn",
         "server": "dns_resolver"
@@ -109,22 +53,12 @@
         "server": "dns_proxy"
       },
       {
-        "process_name": [
-          "TencentMeeting",
-          "BaiduNetdisk",
-          "ToDesk",
-          "ToDesk_Service",
-          "QQ",
-          "Tailscale"
-        ],
-        "server": "dns_direct"
-      },
-      {
         "rule_set": "geosite-geolocation-!cn",
         "server": "dns_proxy"
       }
     ],
-    "final": "dns_proxy"
+    "final": "dns_proxy",
+    "strategy": "ipv4_only"
   },
   "inbounds": [
     {
@@ -393,6 +327,12 @@
     },
     "rules": [
       {
+        "ip_version": 6,
+        "network": "tcp",
+        "action": "reject",
+        "no_drop": true
+      },
+      {
         "action": "sniff"
       },
       {
@@ -400,56 +340,10 @@
         "action": "hijack-dns"
       },
       {
-        "domain": [
-          "wxsnsdy.wxs.qq.com",
-          "wxsnsdythumb.wxs.qq.com",
-          "getappmsgad.mp.weixin.qq.com",
-          "adsmind.apdcdn.tc.qq.com",
-          "adsmind.gdtimg.com",
-          "adsmind.tc.qq.com",
-          "pgdt.gtimg.cn",
-          "pgdt.gtimg.com",
-          "pgdt.ugdtimg.com"
-        ],
-        "action": "reject"
-      },
-      {
-        "domain_suffix": [
-          "gdt.qq.com",
-          "e.qq.com",
-          "l.qq.com",
-          "adsfile.qq.com",
-          "ad.qun.qq.com"
-        ],
-        "action": "reject"
-      },
-      {
-        "rule_set": "geosite-category-ads-all",
-        "action": "reject"
-      },
-      {
         "protocol": "quic",
         "rule_set": [
           "geosite-cn",
           "geoip-cn"
-        ],
-        "outbound": "🇨🇳 China"
-      },
-      {
-        "protocol": "quic",
-        "process_name": [
-          "WeChat",
-          "Weixin",
-          "QQ"
-        ],
-        "outbound": "🇨🇳 China"
-      },
-      {
-        "protocol": "quic",
-        "domain_suffix": [
-          "qq.com",
-          "gtimg.com",
-          "gtimg.cn"
         ],
         "outbound": "🇨🇳 China"
       },
@@ -587,12 +481,6 @@
     ],
     "rule_set": [
       {
-        "tag": "geosite-private",
-        "type": "remote",
-        "format": "binary",
-        "url": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/private.srs"
-      },
-      {
         "tag": "geosite-steam",
         "type": "remote",
         "format": "binary",
@@ -683,12 +571,6 @@
         "url": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/bilibili.srs"
       },
       {
-        "tag": "geosite-spotify",
-        "type": "remote",
-        "format": "binary",
-        "url": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/spotify.srs"
-      },
-      {
         "tag": "geosite-tiktok",
         "type": "remote",
         "format": "binary",
@@ -741,12 +623,6 @@
         "type": "remote",
         "format": "binary",
         "url": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/geolocation-!cn.srs"
-      },
-      {
-        "tag": "geosite-category-ads-all",
-        "type": "remote",
-        "format": "binary",
-        "url": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/category-ads-all.srs"
       },
       {
         "tag": "geosite-feishu",

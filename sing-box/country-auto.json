@@ -76,13 +76,6 @@
                 "action": "reject"
             },
             {
-                "process_name": [
-                    "WeChat",
-                    "Weixin"
-                ],
-                "server": "dns_resolver"
-            },
-            {
                 "query_type": "AAAA",
                 "rule_set": [
                     "geosite-github",
@@ -484,13 +477,6 @@
                 "action": "reject"
             },
             {
-                "process_name": [
-                    "WeChat",
-                    "Weixin"
-                ],
-                "outbound": "🇨🇳 China"
-            },
-            {
                 "protocol": "quic",
                 "rule_set": [
                     "geosite-cn",
@@ -501,6 +487,8 @@
             {
                 "protocol": "quic",
                 "process_name": [
+                    "WeChat",
+                    "Weixin",
                     "QQ"
                 ],
                 "outbound": "🇨🇳 China"

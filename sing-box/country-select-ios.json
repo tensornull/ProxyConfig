@@ -76,13 +76,6 @@
         "action": "reject"
       },
       {
-        "process_name": [
-          "WeChat",
-          "Weixin"
-        ],
-        "server": "dns_resolver"
-      },
-      {
         "query_type": "AAAA",
         "rule_set": [
           "geosite-github",
@@ -115,17 +108,6 @@
       {
         "clash_mode": "global",
         "server": "dns_proxy"
-      },
-      {
-        "process_name": [
-          "TencentMeeting",
-          "BaiduNetdisk",
-          "ToDesk",
-          "ToDesk_Service",
-          "QQ",
-          "Tailscale"
-        ],
-        "server": "dns_direct"
       },
       {
         "rule_set": "geosite-geolocation-!cn",
@@ -436,24 +418,10 @@
         "action": "reject"
       },
       {
-        "process_name": [
-          "WeChat",
-          "Weixin"
-        ],
-        "outbound": "🇨🇳 China"
-      },
-      {
         "protocol": "quic",
         "rule_set": [
           "geosite-cn",
           "geoip-cn"
-        ],
-        "outbound": "🇨🇳 China"
-      },
-      {
-        "protocol": "quic",
-        "process_name": [
-          "QQ"
         ],
         "outbound": "🇨🇳 China"
       },

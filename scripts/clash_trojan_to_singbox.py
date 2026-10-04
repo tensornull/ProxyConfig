@@ -22,7 +22,7 @@ import yaml
 
 TEMPLATE_URL = (
     "https://raw.githubusercontent.com/tensornull/ProxyConfig"
-    "/main/sing-box/country-select-macos.json"
+    "/main/sing-box/country-auto-v4.json"
 )
 
 

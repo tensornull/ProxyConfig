@@ -24,6 +24,7 @@ DEFAULT_TEMPLATES = [
     REPO_ROOT / "sing-box" / "country-select-macos.json",
     REPO_ROOT / "sing-box" / "country-select-ios.json",
 ]
+TEMPLATE_VARIANT_RE = re.compile(r"-(v4|v6)$", re.IGNORECASE)
 COUNTRY_SELECTORS = [
     "🇭🇰 Hong Kong",
     "🇯🇵 Japan",
@@ -35,6 +36,33 @@ CONTROL_OUTBOUND_TYPES = {"selector", "urltest", "direct", "block", "dns"}
 FALLBACK_ONLY_TAGS = {"Proxy", "direct"}
 PLACEHOLDER_RE = re.compile(r"^\{[^{}]+\}$")
 WARNING_RE = re.compile(r"deprecated|legacy|warning|warn", re.IGNORECASE)
+ADS_RULE_SET = "geosite-category-ads-all"
+REQUIRED_POLICY_RULE_SETS = {
+    "geosite-cn",
+    "geoip-cn",
+    "geosite-geolocation-!cn",
+    ADS_RULE_SET,
+}
+HAND_WRITTEN_APP_TERMS = re.compile(
+    r"(?:^|[.\\/_-])(?:qq|tencent|wechat|weixin|taobao|tmall|alicdn|mmstat)(?:$|[.\\/_-])",
+    re.IGNORECASE,
+)
+PROCESS_RULE_KEYS = {
+    "process_name",
+    "process_name_regex",
+    "process_path",
+    "process_path_regex",
+    "package_name",
+    "package_name_regex",
+    "user",
+}
+HAND_WRITTEN_DOMAIN_KEYS = (
+    "domain",
+    "domain_suffix",
+    "domain_keyword",
+    "domain_regex",
+    "domain_regex_exclude",
+)
 
 
 class ValidationFailure(Exception):
@@ -79,12 +107,114 @@ def port_includes_443(value: Any) -> bool:
     return False
 
 
+def infer_template_variant(path: Path) -> str | None:
+    """Return the v4/v6 suffix encoded in a template filename, if any.
+
+    The four historical, unsuffixed entry points are v4 compatibility aliases
+    after the rollout.  Treat those known names as v4 while leaving arbitrary
+    caller-provided paths unclassified; callers can still use the generic
+    policy checks for an unclassified template.
+    """
+
+    match = TEMPLATE_VARIANT_RE.search(path.stem)
+    if match:
+        return match.group(1).lower()
+    if path.name in {template.name for template in DEFAULT_TEMPLATES}:
+        return "v4"
+    return None
+
+
+def relative_label(path: Path) -> str:
+    """Render a stable, non-secret label for command output."""
+
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def rule_sets_in(rules: list[Any]) -> set[str]:
+    tags: set[str] = set()
+    for obj in walk_objects(rules):
+        if not isinstance(obj, dict):
+            continue
+        for rule_set in as_list(obj.get("rule_set")):
+            if isinstance(rule_set, str):
+                tags.add(rule_set)
+    return tags
+
+
+def first_rule_index(rules: list[Any], predicate) -> int | None:
+    for index, rule in enumerate(rules):
+        if isinstance(rule, dict) and predicate(rule):
+            return index
+    return None
+
+
+def has_pre_sniff_ipv6_tcp_reject(route_rules: list[Any]) -> bool:
+    """Whether an IPv6 TCP reject appears before the first sniff action."""
+
+    first_sniff = first_rule_index(
+        route_rules,
+        lambda rule: rule.get("action") == "sniff",
+    )
+    before_sniff = route_rules if first_sniff is None else route_rules[:first_sniff]
+    return any(
+        isinstance(rule, dict)
+        and rule.get("ip_version") == 6
+        and rule.get("network") in (None, "tcp")
+        and rule.get("action") == "reject"
+        and rule.get("no_drop") is True
+        for rule in before_sniff
+    )
+
+
+def tun_inbounds(doc: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        inbound
+        for inbound in doc.get("inbounds") or []
+        if isinstance(inbound, dict) and inbound.get("type") == "tun"
+    ]
+
+
+def has_ipv6_tun_prefix(doc: dict[str, Any]) -> bool:
+    return any(
+        any(":" in str(address) for address in as_list(inbound.get("address")))
+        for inbound in tun_inbounds(doc)
+    )
+
+
+def has_ipv6_tun_route(doc: dict[str, Any]) -> bool:
+    """Check that IPv6 traffic remains routed into the TUN.
+
+    sing-box's ``auto_route`` installs the equivalent of ``::/0``.  Newer
+    templates may express it explicitly via ``route_address``; accept either
+    form while requiring an IPv6 TUN prefix.
+    """
+
+    for inbound in tun_inbounds(doc):
+        if inbound.get("auto_route") is True:
+            return True
+        for address in as_list(inbound.get("route_address")):
+            if address == "::/0":
+                return True
+    return False
+
+
+def has_ipv6_private_exclusion(doc: dict[str, Any]) -> bool:
+    return any(
+        "fc00::/7" in as_list(inbound.get("route_exclude_address"))
+        for inbound in tun_inbounds(doc)
+    )
+
+
 def check_document(
     label: str,
     doc: dict[str, Any],
     *,
     allow_placeholders: bool,
     require_real_nodes: bool,
+    expected_variant: str | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     failures: list[str] = []
     outbounds = doc.get("outbounds") or []
@@ -107,6 +237,7 @@ def check_document(
         for rule_set in route_rule_sets
         if isinstance(rule_set, dict) and isinstance(rule_set.get("tag"), str)
     }
+    all_rule_sets = rule_sets_in(dns_rules) | rule_sets_in(route_rules)
 
     if len(outbound_tags) != len(outbound_tag_set):
         failures.append(f"{label}: duplicate outbound tags exist")
@@ -116,6 +247,46 @@ def check_document(
         for ob in outbounds
     ):
         failures.append(f"{label}: direct outbound fallback tag 'Proxy' is present")
+
+    # Since sing-box 1.11, a rule that selects an outbound must use the
+    # explicit route action.  Keep this check recursive so a future logical
+    # rule cannot silently reintroduce the deprecated shorthand.
+    for obj in walk_objects(route_rules):
+        if not isinstance(obj, dict) or not obj.get("outbound"):
+            continue
+        if obj.get("action") != "route":
+            failures.append(
+                f"{label}: route rule with outbound {obj.get('outbound')} "
+                "must use action=route"
+            )
+
+    # Hand-maintained application lists are deliberately excluded from the
+    # templates.  QQ/WeChat/Taobao and similar domestic services are covered by
+    # the remote CN rule sets; process-name matching also bypasses DNS policy.
+    for scope, rules in (("route", route_rules), ("dns", dns_rules)):
+        for obj in walk_objects(rules):
+            if not isinstance(obj, dict):
+                continue
+            process_keys = PROCESS_RULE_KEYS.intersection(obj)
+            if process_keys:
+                failures.append(
+                    f"{label}: {scope} process rule is not allowed "
+                    f"({','.join(sorted(process_keys))})"
+                )
+            for key in HAND_WRITTEN_DOMAIN_KEYS:
+                for value in as_list(obj.get(key)):
+                    if isinstance(value, str) and HAND_WRITTEN_APP_TERMS.search(value):
+                        failures.append(
+                            f"{label}: {scope} hand-written application domain {value}"
+                        )
+            if (
+                obj.get("action") == "reject"
+                and "rule_set" not in obj
+                and any(key in obj for key in HAND_WRITTEN_DOMAIN_KEYS)
+            ):
+                failures.append(
+                    f"{label}: {scope} hand-written domain reject is not allowed"
+                )
 
     for ob in outbounds:
         if not isinstance(ob, dict):
@@ -171,6 +342,72 @@ def check_document(
                 if rule_set not in rule_set_tags:
                     failures.append(f"{label}: {scope} rule_set {rule_set} is missing")
 
+    missing_policy_rule_sets = sorted(REQUIRED_POLICY_RULE_SETS - all_rule_sets)
+    if missing_policy_rule_sets:
+        failures.append(
+            f"{label}: required policy rule-sets are missing: "
+            + ", ".join(missing_policy_rule_sets)
+        )
+
+    ads_definitions = [
+        rule_set
+        for rule_set in route_rule_sets
+        if isinstance(rule_set, dict) and rule_set.get("tag") == ADS_RULE_SET
+    ]
+    if ads_definitions and not any(
+        definition.get("type") == "remote" for definition in ads_definitions
+    ):
+        failures.append(f"{label}: {ADS_RULE_SET} must be a remote rule-set")
+
+    # The ad rule-set must be evaluated before CN routing in DNS and before
+    # business/mode routing in the route table.  This leaves service-specific
+    # remote rules intact while preventing a CN catch-all from winning first.
+    for scope, rules in (("dns", dns_rules), ("route", route_rules)):
+        ads_reject_indices = [
+            index
+            for index, rule in enumerate(rules)
+            if isinstance(rule, dict)
+            and ADS_RULE_SET in as_list(rule.get("rule_set"))
+            and rule.get("action") == "reject"
+        ]
+        if not ads_reject_indices:
+            failures.append(f"{label}: {scope} has no {ADS_RULE_SET} reject rule")
+            continue
+        ads_index = min(ads_reject_indices)
+        if scope == "dns":
+            cn_index = first_rule_index(
+                rules,
+                lambda rule: "geosite-cn" in as_list(rule.get("rule_set")),
+            )
+            if cn_index is not None and ads_index > cn_index:
+                failures.append(
+                    f"{label}: dns {ADS_RULE_SET} reject must precede geosite-cn"
+                )
+        else:
+            business_index = first_rule_index(
+                rules,
+                lambda rule: bool(rule.get("outbound")) or bool(rule.get("clash_mode")),
+            )
+            if business_index is not None and ads_index > business_index:
+                failures.append(
+                    f"{label}: route {ADS_RULE_SET} reject must precede business/mode rules"
+                )
+
+    # Keep the three user-facing mode choices explicit.  Direct is required for
+    # local testing and Global remains the existing NodeSelected override.
+    mode_targets = {"direct": "direct", "global": "🛩️ NodeSelected"}
+    for mode, target in mode_targets.items():
+        if not any(
+            isinstance(rule, dict)
+            and rule.get("clash_mode") == mode
+            and rule.get("outbound") == target
+            and rule.get("action") == "route"
+            for rule in route_rules
+        ):
+            failures.append(
+                f"{label}: route clash_mode={mode} must explicitly route to {target}"
+            )
+
     for rule in route_rules:
         if not isinstance(rule, dict):
             continue
@@ -212,53 +449,32 @@ def check_document(
                 f"{label}: global quic reject is missing WeChat/geosite-cn bypass"
             )
 
-    # The TUN carries an IPv6 prefix but there is no IPv6 egress: IPv6 TCP must be
-    # refused at pre-match (before sniff), otherwise apps connect, get reset, and
-    # only recover on retry over IPv4 (WeChat first-load failure, 2026-10-03).
-    tun_has_ipv6 = any(
-        isinstance(inbound, dict)
-        and inbound.get("type") == "tun"
-        and any(":" in str(addr) for addr in as_list(inbound.get("address")))
-        for inbound in doc.get("inbounds") or []
-    )
-    if tun_has_ipv6:
-        first_sniff = next(
-            (
-                index
-                for index, rule in enumerate(route_rules)
-                if isinstance(rule, dict) and rule.get("action") == "sniff"
-            ),
-            len(route_rules),
-        )
-        if not any(
-            isinstance(rule, dict)
-            and rule.get("ip_version") == 6
-            and rule.get("network") in (None, "tcp")
-            and rule.get("action") == "reject"
-            and rule.get("no_drop") is True
-            for rule in route_rules[:first_sniff]
-        ):
+    tun_has_ipv6 = has_ipv6_tun_prefix(doc)
+    if expected_variant == "v4":
+        if dns.get("strategy") != "ipv4_only":
+            failures.append(f"{label}: v4 template must use dns.strategy=ipv4_only")
+        if tun_has_ipv6 and not has_pre_sniff_ipv6_tcp_reject(route_rules):
             failures.append(
-                f"{label}: tun has IPv6 but no pre-sniff ip_version=6 tcp reject (no_drop)"
+                f"{label}: v4 template requires pre-sniff ip_version=6 tcp reject (no_drop)"
             )
-
-    # Ad blocking is optional (removed 2026-10-03); if present it must precede geosite-cn.
-    for scope, rules in (("dns", dns_rules), ("route", route_rules)):
-        saw_geosite_cn = False
-        for rule in rules:
-            if not isinstance(rule, dict):
-                continue
-            rule_sets = as_list(rule.get("rule_set"))
-            if "geosite-cn" in rule_sets and rule.get("action") != "reject":
-                saw_geosite_cn = True
-            if (
-                "geosite-category-ads-all" in rule_sets
-                and rule.get("action") == "reject"
-                and saw_geosite_cn
-            ):
-                failures.append(
-                    f"{label}: {scope} geosite-category-ads-all reject is after geosite-cn"
-                )
+    elif expected_variant == "v6":
+        if dns.get("strategy") != "prefer_ipv6":
+            failures.append(f"{label}: v6 template must use dns.strategy=prefer_ipv6")
+        resolver = route.get("default_domain_resolver") or {}
+        if not isinstance(resolver, dict) or resolver.get("strategy") != "prefer_ipv6":
+            failures.append(
+                f"{label}: v6 template requires route.default_domain_resolver.strategy=prefer_ipv6"
+            )
+        if has_pre_sniff_ipv6_tcp_reject(route_rules):
+            failures.append(
+                f"{label}: v6 template must not pre-reject IPv6 TCP before sniff"
+            )
+        if not tun_has_ipv6:
+            failures.append(f"{label}: v6 template must retain a TUN IPv6 prefix")
+        if tun_has_ipv6 and not has_ipv6_tun_route(doc):
+            failures.append(f"{label}: v6 template must route IPv6 ::/0 into the TUN")
+        if tun_has_ipv6 and not has_ipv6_private_exclusion(doc):
+            failures.append(f"{label}: v6 template must exclude fc00::/7 from the TUN")
 
     real_proxy_nodes = [
         ob
@@ -312,6 +528,11 @@ def check_document(
         "real_proxy_node_count": len(real_proxy_nodes),
         "proxy_direct_count": proxy_direct_count,
         "country_fallback_only_count": len(fallback_only_groups),
+        "variant": expected_variant or "unclassified",
+        "dns_strategy": dns.get("strategy"),
+        "rule_set_count": len(rule_set_tags),
+        "ads_rule_set": ADS_RULE_SET in rule_set_tags,
+        "pre_sniff_ipv6_tcp_reject": has_pre_sniff_ipv6_tcp_reject(route_rules),
     }
     return failures, stats
 
@@ -331,6 +552,14 @@ def find_sing_box(explicit: str | None) -> Path | None:
     env_path = os.environ.get("SING_BOX_BIN")
     if env_path:
         candidates.append(Path(env_path))
+    candidates.append(
+        REPO_ROOT
+        / "sing-box"
+        / ".tmp"
+        / "tools"
+        / "sing-box-1.14.2-darwin-arm64"
+        / "sing-box"
+    )
     candidates.append(
         REPO_ROOT
         / "sing-box"
@@ -406,6 +635,47 @@ def build_subscription_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(Redirect308Handler())
 
 
+def selected_templates(paths: list[str] | None) -> list[Path]:
+    """Resolve ``--template`` paths, or use the repository defaults.
+
+    Explicit paths are intentionally not globbed: a repeated option gives the
+    caller a deterministic validation set and avoids accidentally consuming
+    generated files under ``sing-box/.tmp``.  Once the v4/v6 rollout adds
+    suffixed templates, discover those tracked entry points alongside the four
+    historical files for the default invocation.
+    """
+
+    if paths:
+        selected: list[Path] = []
+        seen: set[Path] = set()
+        for raw_path in paths:
+            for item in raw_path.split(","):
+                item = item.strip()
+                if not item:
+                    continue
+                path = Path(item).expanduser()
+                if path.is_dir():
+                    # A directory argument is useful for validating the full
+                    # template family without including generated .tmp files.
+                    candidates = sorted(path.glob("country-*.json"))
+                    if not candidates:
+                        candidates = sorted(path.glob("*.json"))
+                else:
+                    candidates = [path]
+                for candidate in candidates:
+                    key = candidate.resolve() if candidate.exists() else candidate
+                    if key not in seen:
+                        seen.add(key)
+                        selected.append(candidate)
+        return selected
+    templates = list(DEFAULT_TEMPLATES)
+    for path in sorted((REPO_ROOT / "sing-box").glob("country-*.json")):
+        if TEMPLATE_VARIANT_RE.search(path.stem):
+            if path not in templates:
+                templates.append(path)
+    return templates
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Validate sing-box templates and SFM final subscription output."
@@ -421,6 +691,17 @@ def parse_args() -> argparse.Namespace:
         help="Only validate local templates. Do not use this before publishing sing-box changes.",
     )
     parser.add_argument(
+        "--template",
+        dest="templates",
+        action="append",
+        metavar="PATH",
+        help=(
+            "Local template to validate; repeat or comma-separate paths (a directory "
+            "selects country-*.json). "
+            "Names ending in -v4/-v6 enable variant-specific assertions."
+        ),
+    )
+    parser.add_argument(
         "--sing-box",
         help="Optional sing-box CLI path. May also be set via SING_BOX_BIN.",
     )
@@ -433,14 +714,23 @@ def main() -> int:
     sing_box = find_sing_box(args.sing_box)
 
     template_stats: list[str] = []
-    for template_path in DEFAULT_TEMPLATES:
-        doc = load_json(template_path)
-        label = str(template_path.relative_to(REPO_ROOT))
+    templates = selected_templates(args.templates)
+    if not templates:
+        failures.append("no local templates were selected")
+    for template_path in templates:
+        label = relative_label(template_path)
+        try:
+            doc = load_json(template_path)
+        except (OSError, json.JSONDecodeError, ValidationFailure) as exc:
+            failures.append(f"{label}: cannot load template ({exc})")
+            continue
+        expected_variant = infer_template_variant(template_path)
         doc_failures, stats = check_document(
             label,
             doc,
             allow_placeholders=True,
             require_real_nodes=False,
+            expected_variant=expected_variant,
         )
         failures.extend(doc_failures)
         failures.extend(
@@ -453,7 +743,9 @@ def main() -> int:
         )
         template_stats.append(
             f"{label}: outbounds={stats['outbound_count']} "
-            f"proxy_direct={stats['proxy_direct_count']}"
+            f"proxy_direct={stats['proxy_direct_count']} "
+            f"variant={stats['variant']} "
+            f"dns_strategy={stats['dns_strategy']}"
         )
 
     print("local_templates_json_ok=true")

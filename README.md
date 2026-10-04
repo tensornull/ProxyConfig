@@ -1,22 +1,20 @@
 # ProxyConfig
 
 This repository converts Clash Trojan subscriptions into sing-box templates.
-The stable compatibility entry is the IPv4 track; the IPv6 track is kept as an
-explicit experiment until real end-to-end IPv6 probes pass.
+The stable compatibility entry is now the IPv6 track. The automatic IPv4
+template remains as the single rollback copy.
 
 ## Template tracks
 
 The target families are:
 
-- `sing-box/country-auto-v4.json`: automatic country URL tests with
-  `dns.strategy: ipv4_only` and the pre-sniff IPv6 TCP fallback reject.
-- `sing-box/country-auto-v6.json`: the same automatic groups with
-  `prefer_ipv6`, used only for IPv6 experiments.
-- `country-select*.json` and their `-v4`/`-v6` variants: the corresponding
-  macOS, iOS, and generic selector templates. They are generated only after
-  both automatic pilot tracks pass the release probes.
-- The four unsuffixed templates remain the existing compatibility entries until
-  that gate passes; the pilot build never overwrites them.
+- `sing-box/country-auto.json` and `sing-box/country-auto-v6.json`: automatic
+  country URL tests with `prefer_ipv6`; the unsuffixed file is the canonical
+  default entry and the suffixed file is its explicit-track copy.
+- `sing-box/country-auto-v4.json`: the single IPv4 rollback copy with
+  `ipv4_only` and the pre-sniff IPv6 TCP fallback reject.
+- `country-select*.json` and their `-v6` variants: the macOS, iOS, and generic
+  selector templates. The four unsuffixed files are synchronized v6 aliases.
 
 All service-specific routing stays in remote rule-sets. The templates keep the
 remote `geosite-category-ads-all` set for optional ad rejection, but contain no
@@ -34,15 +32,16 @@ python3 scripts/build_singbox_templates.py \
   --output-dir sing-box
 ```
 
-The all-platform expansion is deliberately explicit and does not overwrite
-the unsuffixed files:
+The builder can reproduce both tracks for all four platforms in a temporary
+directory:
 
 ```sh
-python3 scripts/build_singbox_templates.py --all --output-dir sing-box
+python3 scripts/build_singbox_templates.py --all --output-dir sing-box/.tmp/template-tests/<run>/generated
 ```
 
-Run it only after the pilot test reports no failures, including two real IPv6
-HTTPS probes. A failed IPv6 probe keeps the six additional files unpromoted.
+The checked-in v6 files are the result of the user's successful end-to-end
+test. The builder never overwrites unsuffixed files; promotion is an explicit
+copy step after review.
 
 Run static checks and the remote rule-set probes. Each run writes only
 non-secret diagnostics under `sing-box/.tmp/template-tests/<run>/`:
@@ -62,7 +61,7 @@ missing references, and `sing-box check` success:
 ```sh
 SINGBOX_SUBSCRIPTION_URL='…' \
   python3 scripts/validate_singbox_subscription.py \
-  --template sing-box/country-auto-v4.json
+  --template sing-box/country-auto.json
 ```
 
 Do not put subscription URLs, passwords, or complete node bodies in logs.

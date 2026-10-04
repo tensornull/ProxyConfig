@@ -110,8 +110,8 @@ def port_includes_443(value: Any) -> bool:
 def infer_template_variant(path: Path) -> str | None:
     """Return the v4/v6 suffix encoded in a template filename, if any.
 
-    The four historical, unsuffixed entry points are v4 compatibility aliases
-    after the rollout.  Treat those known names as v4 while leaving arbitrary
+    The four historical, unsuffixed entry points are v6 default aliases after
+    the rollout. Treat those known names as v6 while leaving arbitrary
     caller-provided paths unclassified; callers can still use the generic
     policy checks for an unclassified template.
     """
@@ -120,7 +120,7 @@ def infer_template_variant(path: Path) -> str | None:
     if match:
         return match.group(1).lower()
     if path.name in {template.name for template in DEFAULT_TEMPLATES}:
-        return "v4"
+        return "v6"
     return None
 
 
@@ -453,6 +453,11 @@ def check_document(
     if expected_variant == "v4":
         if dns.get("strategy") != "ipv4_only":
             failures.append(f"{label}: v4 template must use dns.strategy=ipv4_only")
+        resolver = route.get("default_domain_resolver") or {}
+        if not isinstance(resolver, dict) or resolver.get("strategy") != "prefer_ipv4":
+            failures.append(
+                f"{label}: v4 template requires route.default_domain_resolver.strategy=prefer_ipv4"
+            )
         if tun_has_ipv6 and not has_pre_sniff_ipv6_tcp_reject(route_rules):
             failures.append(
                 f"{label}: v4 template requires pre-sniff ip_version=6 tcp reject (no_drop)"
@@ -698,7 +703,8 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Local template to validate; repeat or comma-separate paths (a directory "
             "selects country-*.json). "
-            "Names ending in -v4/-v6 enable variant-specific assertions."
+            "Names ending in -v4/-v6 enable variant-specific assertions; the four "
+            "canonical unsuffixed country templates are treated as v6."
         ),
     )
     parser.add_argument(

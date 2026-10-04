@@ -16,7 +16,7 @@ Use this skill for `ProxyConfig/sing-box` subscription conversion work.
    - `sing-box/.tmp/<provider>-auto.json`
    - `sing-box/.tmp/<provider>-select.json`
 5. Use the current known-good `.tmp` auto/select configs as the base so DNS, inbounds, route policy, Clash API, and local fixes stay intact.
-6. Convert only supported node types. For Clash `trojan`, map `port` to `server_port`, `skip-cert-verify` to `tls.insecure`, and `sni` to `tls.server_name`; preserve supported `ws` and `grpc` transport options. Use `country-auto-v4.json` as the default template unless an explicit track is requested.
+6. Convert only supported node types. For Clash `trojan`, map `port` to `server_port`, `skip-cert-verify` to `tls.insecure`, and `sni` to `tls.server_name`; preserve supported `ws` and `grpc` transport options. Use the canonical `country-auto.json` (synchronized v6 default) unless an explicit track is requested.
 7. Preserve all converted nodes as outbounds. First-class country groups are HK/JP/SG/TW/US. Put `🇯🇵 Japan` on `🛩️ NodeSelected`, `⚡️ Auto` (auto template), policy selectors, and `😮‍💨 Final`. Auto may exclude `(?i)bronze|silver` for HK/SG/US only — never for `🇹🇼 Taiwan` or `🇯🇵 Japan`.
 8. Preserve the Steam route fix:
    - Add the `🎮 Other` selector outbound: members `["🛩️ NodeSelected", "direct", "🇭🇰 Hong Kong", "🇹🇼 Taiwan", "🇸🇬 Singapore", "🇺🇸 America"]`, `default` `🛩️ NodeSelected` (placed just before `😮‍💨 Final`). Steam stays without `🇯🇵 Japan`.
@@ -24,7 +24,7 @@ Use this skill for `ProxyConfig/sing-box` subscription conversion work.
    - Add the remote `geosite-steam` rule-set URL from `sing-box/AGENTS.md`.
 9. Preserve the Safari/system-HTTP QUIC fallback after sniffing, but do not put a bare `{ "protocol": "quic", "action": "reject" }` first: `{ "protocol": "quic", "rule_set": ["geosite-cn", "geoip-cn"], "action": "route", "outbound": "🇨🇳 China" }` goes before it. Do not use a global `udp/443 reject`.
 10. Keep all existing remote service rule-sets and add the remote `geosite-category-ads-all` set by default. Put DNS and route ad rejects before `geosite-cn` and mode/business rules. Do not add hand-written ad hosts, `process_name` rules, or WeChat/QQ/Taobao per-app domain lists; rely on remote rule-sets. Never delete the user's own infrastructure rules, and keep `🇨🇳 China` selectable (see `sing-box/AGENTS.md`).
-11. Generate paired tracks. `*-v4.json` keeps the verified pre-sniff `{ "ip_version": 6, "network": "tcp", "action": "reject", "no_drop": true }` and `dns.strategy: "ipv4_only"`. `*-v6.json` removes that reject and uses `prefer_ipv6` for DNS and the default domain resolver while retaining the TUN IPv6 prefix, automatic `::/0`, and `fc00::/7` exclusion. Do not promote v6 until the real IPv6 probes pass (see `sing-box/AGENTS.md`).
+11. Generate paired tracks. `*-v6.json` is the default after the user's end-to-end approval: it removes the IPv6 TCP pre-match reject and uses `prefer_ipv6` for DNS and the default domain resolver while retaining the TUN IPv6 prefix, automatic `::/0`, and `fc00::/7` exclusion. Keep `country-auto-v4.json` as the sole rollback copy; it retains the verified pre-sniff reject and `ipv4_only` strategy (see `sing-box/AGENTS.md`).
 12. Use explicit route actions for outbound selection: `{ "action": "route", "outbound": "..." }`; the legacy outer `outbound` field is deprecated in new templates. Keep `clash_mode: "direct"` and `clash_mode: "global"` route rules explicit.
 
 ## Validation

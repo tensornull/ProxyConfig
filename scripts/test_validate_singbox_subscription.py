@@ -135,6 +135,12 @@ class ValidatorPolicyTests(unittest.TestCase):
         failures = self.validate(document, "v4")
         self.assertTrue(any("pre-sniff" in failure for failure in failures))
 
+    def test_v4_requires_prefer_ipv4_resolver(self):
+        document = policy_document("v4")
+        document["route"]["default_domain_resolver"]["strategy"] = "prefer_ipv6"
+        failures = self.validate(document, "v4")
+        self.assertTrue(any("prefer_ipv4" in failure for failure in failures))
+
     def test_v6_rejects_pre_sniff_ipv6_reject(self):
         document = policy_document("v6")
         document["route"]["rules"].insert(
@@ -169,7 +175,7 @@ class ValidatorPolicyTests(unittest.TestCase):
     def test_variant_inference_and_directory_selection(self):
         self.assertEqual(infer_template_variant(Path("country-auto-v4.json")), "v4")
         self.assertEqual(infer_template_variant(Path("country-auto-v6.json")), "v6")
-        self.assertEqual(infer_template_variant(Path("country-auto.json")), "v4")
+        self.assertEqual(infer_template_variant(Path("country-auto.json")), "v6")
         self.assertEqual(infer_template_variant(Path("custom.json")), None)
 
         with TemporaryDirectory() as directory:

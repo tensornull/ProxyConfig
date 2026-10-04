@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static, rule-set, and optional network probes for suffixed templates.
+"""Static, rule-set, and optional network probes for sing-box templates.
 
 This tool deliberately reports counts and rule tags only.  It never reads a
 provider URL or prints outbound node bodies.  Downloaded rule-sets, stripped
@@ -48,6 +48,12 @@ COUNTRY_TAGS = (
     "🇸🇬 Singapore",
     "🇺🇸 America",
 )
+CANONICAL_TEMPLATES = {
+    "country-auto.json",
+    "country-select.json",
+    "country-select-macos.json",
+    "country-select-ios.json",
+}
 REQUIRED_SERVICE_RULESETS = (
     "geosite-openai",
     "geosite-anthropic",
@@ -381,8 +387,18 @@ def check_handwritten_rules(
 
 
 def check_ipv6_track(label: str, doc: dict[str, Any], result: CheckResult) -> None:
-    stem = Path(label).stem
-    variant = "v6" if stem.endswith("-v6") else "v4" if stem.endswith("-v4") else None
+    path = Path(label)
+    stem = path.stem
+    if stem.endswith("-v6"):
+        variant = "v6"
+    elif stem.endswith("-v4"):
+        variant = "v4"
+    elif path.name in CANONICAL_TEMPLATES:
+        # The unsuffixed entry points are synchronized v6 aliases after the
+        # rollout; keep their IPv6 semantics covered by the default scan.
+        variant = "v6"
+    else:
+        variant = None
     if variant is None:
         result.warn(f"{label}: skipped track-specific checks for unsuffixed template")
         return
@@ -907,10 +923,15 @@ def main(argv: list[str] | None = None) -> int:
     else:
         directory = args.templates_dir if args.templates_dir.is_absolute() else REPO_ROOT / args.templates_dir
         paths = sorted(directory.glob("*-v[46].json"))
+        paths.extend(
+            directory / name
+            for name in sorted(CANONICAL_TEMPLATES)
+            if (directory / name).is_file()
+        )
     if not paths:
-        result.fail("no suffixed templates found")
+        result.fail("no tracked templates found")
         print("template_tests_ok=false")
-        print("failure=no suffixed templates found")
+        print("failure=no tracked templates found")
         return 1
     documents: list[tuple[Path, dict[str, Any]]] = []
     for path in paths:

@@ -14,7 +14,7 @@
     },
     "cache_file": {
       "enabled": true,
-      "store_fakeip": false
+      "store_fakeip": true
     }
   },
   "http_clients": [
@@ -25,6 +25,12 @@
   ],
   "dns": {
     "servers": [
+      {
+        "tag": "fakeip",
+        "type": "fakeip",
+        "inet4_range": "198.18.0.0/15",
+        "inet6_range": "2001:2::/48"
+      },
       {
         "tag": "dns_proxy",
         "type": "https",
@@ -53,6 +59,13 @@
         "server": "dns_resolver"
       },
       {
+        "query_type": [
+          "A",
+          "AAAA"
+        ],
+        "server": "fakeip"
+      },
+      {
         "clash_mode": "global",
         "server": "dns_proxy"
       },
@@ -62,7 +75,8 @@
       }
     ],
     "final": "dns_proxy",
-    "strategy": "prefer_ipv6"
+    "strategy": "prefer_ipv6",
+    "reverse_mapping": true
   },
   "inbounds": [
     {
@@ -351,10 +365,6 @@
         "action": "route"
       },
       {
-        "protocol": "quic",
-        "action": "reject"
-      },
-      {
         "clash_mode": "direct",
         "action": "route",
         "outbound": "direct"
@@ -503,6 +513,10 @@
         ],
         "outbound": "direct",
         "action": "route"
+      },
+      {
+        "protocol": "quic",
+        "action": "reject"
       }
     ],
     "rule_set": [

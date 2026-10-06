@@ -30,6 +30,10 @@ from build_singbox_templates import (
     ALLOWED_DOMAIN_VALUES,
     APP_DOMAIN_MARKERS,
     DOMAIN_KEYS,
+    FAKEIP_INET4_RANGE,
+    FAKEIP_INET6_RANGE,
+    FAKEIP_QUERY_TYPES,
+    FAKEIP_SERVER_TAG,
     PROCESS_KEYS,
     as_list,
     is_handwritten_app_or_ad_rule,
@@ -98,6 +102,7 @@ ROUTE_PROBES = (
     ("google.com", "🌐 Google"),
     ("api.openai.com", "🤖 AI"),
     ("github.com", "🛩️ NodeSelected"),
+    ("github.githubassets.com", "🛩️ NodeSelected"),
     ("store.steampowered.com", "🎮 Other"),
     ("ad.ozone.ru", "reject"),
 )
@@ -355,6 +360,16 @@ def check_route_references(
     )
     if quic_allow is None or quic_reject is None or quic_allow >= quic_reject:
         result.fail(f"{label}: domestic QUIC allow must precede generic reject")
+    for rule_set_name in ("geosite-github", "geosite-geolocation-!cn"):
+        route_index = first_index(
+            rules,
+            lambda rule, name=rule_set_name: name in as_list(rule.get("rule_set"))
+            and rule.get("action") == "route",
+        )
+        if route_index is not None and quic_reject is not None and quic_reject <= route_index:
+            result.fail(
+                f"{label}: generic QUIC reject must follow {rule_set_name} routing"
+            )
 
 
 def check_handwritten_rules(
@@ -394,8 +409,8 @@ def check_ipv6_track(label: str, doc: dict[str, Any], result: CheckResult) -> No
     elif stem.endswith("-v4"):
         variant = "v4"
     elif path.name in CANONICAL_TEMPLATES:
-        # The unsuffixed entry points are synchronized v6 aliases after the
-        # rollout; keep their IPv6 semantics covered by the default scan.
+        # The unsuffixed entry points are synchronized IPv6-preferred aliases;
+        # explicit -v4 files remain available as opt-in fallbacks.
         variant = "v6"
     else:
         variant = None
@@ -449,6 +464,80 @@ def check_ipv6_track(label: str, doc: dict[str, Any], result: CheckResult) -> No
         result.fail(f"{label}: IPv6 TUN prefix/private exclusion missing")
 
 
+def check_fakeip(label: str, doc: dict[str, Any], result: CheckResult) -> None:
+    """Require the domain-preserving TUN path on every shipped track."""
+
+    dns = doc.get("dns") or {}
+    servers = dns.get("servers") or []
+    fakeip = next(
+        (
+            server
+            for server in servers
+            if isinstance(server, dict) and server.get("tag") == FAKEIP_SERVER_TAG
+        ),
+        None,
+    )
+    if not isinstance(fakeip, dict):
+        result.fail(f"{label}: fakeip DNS server missing")
+    else:
+        if fakeip.get("type") != "fakeip":
+            result.fail(f"{label}: fakeip DNS server type is not fakeip")
+        if fakeip.get("inet4_range") != FAKEIP_INET4_RANGE:
+            result.fail(f"{label}: fakeip IPv4 range changed")
+        if fakeip.get("inet6_range") != FAKEIP_INET6_RANGE:
+            result.fail(f"{label}: fakeip IPv6 range changed")
+    if dns.get("reverse_mapping") is not True:
+        result.fail(f"{label}: DNS reverse_mapping must be enabled")
+    fake_rule = next(
+        (
+            rule
+            for rule in dns.get("rules", []) or []
+            if isinstance(rule, dict)
+            and rule.get("server") == FAKEIP_SERVER_TAG
+            and set(as_list(rule.get("query_type"))) == set(FAKEIP_QUERY_TYPES)
+        ),
+        None,
+    )
+    if fake_rule is None:
+        result.fail(f"{label}: A/AAAA fakeip DNS rule missing")
+    else:
+        dns_rules = [rule for rule in dns.get("rules", []) or [] if isinstance(rule, dict)]
+        fake_index = dns_rules.index(fake_rule)
+        real_dns_indices = [
+            index
+            for index, rule in enumerate(dns_rules)
+            if "geosite-cn" in as_list(rule.get("rule_set"))
+            or rule.get("clash_mode") == "direct"
+        ]
+        if real_dns_indices and fake_index <= max(real_dns_indices):
+            result.fail(
+                f"{label}: FakeIP A/AAAA rule must follow domestic/direct DNS rules"
+            )
+        proxy_dns_indices = [
+            index
+            for index, rule in enumerate(dns_rules)
+            if "geosite-geolocation-!cn" in as_list(rule.get("rule_set"))
+            or rule.get("clash_mode") == "global"
+        ]
+        if proxy_dns_indices and fake_index >= min(proxy_dns_indices):
+            result.fail(
+                f"{label}: FakeIP A/AAAA rule must precede global/foreign DNS rules"
+            )
+    cache = (doc.get("experimental") or {}).get("cache_file") or {}
+    if cache.get("enabled") is not True or cache.get("store_fakeip") is not True:
+        result.fail(f"{label}: persistent fakeip cache is not enabled")
+    route_rules = (doc.get("route") or {}).get("rules") or []
+    if any(
+        isinstance(rule, dict)
+        and rule.get("action") == "resolve"
+        and set(rule) <= {"action", "strategy"}
+        for rule in route_rules
+    ):
+        result.fail(
+            f"{label}: unconditional route.resolve would replace the proxy domain with a local IP"
+        )
+
+
 def check_document(label: str, doc: dict[str, Any]) -> CheckResult:
     result = CheckResult()
     route = doc.get("route") or {}
@@ -484,6 +573,7 @@ def check_document(label: str, doc: dict[str, Any]) -> CheckResult:
     check_route_references(label, doc, result)
     check_handwritten_rules(label, doc, result)
     check_ipv6_track(label, doc, result)
+    check_fakeip(label, doc, result)
 
     outbounds = doc.get("outbounds") or []
     tags_out = {

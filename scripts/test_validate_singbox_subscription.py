@@ -32,7 +32,6 @@ def policy_document(variant: str) -> dict:
             "action": "route",
             "outbound": "🇨🇳 China",
         },
-        {"protocol": "quic", "action": "reject"},
         {"clash_mode": "direct", "action": "route", "outbound": "direct"},
         {
             "clash_mode": "global",
@@ -45,6 +44,7 @@ def policy_document(variant: str) -> dict:
             "action": "route",
             "outbound": "🎯 Foreign",
         },
+        {"protocol": "quic", "action": "reject"},
     ]
     if variant == "v4":
         route_rules.insert(

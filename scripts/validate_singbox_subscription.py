@@ -110,8 +110,8 @@ def port_includes_443(value: Any) -> bool:
 def infer_template_variant(path: Path) -> str | None:
     """Return the v4/v6 suffix encoded in a template filename, if any.
 
-    The four historical, unsuffixed entry points are v6 default aliases after
-    the rollout. Treat those known names as v6 while leaving arbitrary
+    The four historical, unsuffixed entry points are v6 default aliases.
+    Treat those known names as v6 while leaving arbitrary
     caller-provided paths unclassified; callers can still use the generic
     policy checks for an unclassified template.
     """
@@ -448,6 +448,16 @@ def check_document(
             failures.append(
                 f"{label}: global quic reject is missing WeChat/geosite-cn bypass"
             )
+        for rule_set_name in ("geosite-github", "geosite-geolocation-!cn"):
+            route_index = first_rule_index(
+                route_rules,
+                lambda rule, name=rule_set_name: name in as_list(rule.get("rule_set"))
+                and rule.get("action") == "route",
+            )
+            if route_index is not None and first_quic_reject <= route_index:
+                failures.append(
+                    f"{label}: global quic reject must follow {rule_set_name} routing"
+                )
 
     tun_has_ipv6 = has_ipv6_tun_prefix(doc)
     if expected_variant == "v4":

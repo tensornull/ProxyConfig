@@ -28,6 +28,15 @@ ADS_RULE_SET_URL = (
     "geo/geosite/category-ads-all.srs"
 )
 
+# Keep the application-facing address synthetic while retaining the original
+# domain for route matching and proxy protocols.  The IPv6 range is the public
+# benchmark prefix used by Chromium without triggering private-network checks;
+# it is intercepted by the TUN and never sent to the network as a real target.
+FAKEIP_SERVER_TAG = "fakeip"
+FAKEIP_INET4_RANGE = "198.18.0.0/15"
+FAKEIP_INET6_RANGE = "2001:2::/48"
+FAKEIP_QUERY_TYPES = ["A", "AAAA"]
+
 # These are the app-specific rules that the templates previously accumulated.
 # Remote geosite/geoip sets cover them; preserving the user's infrastructure
 # exceptions is handled by ``ALLOWED_DOMAIN_VALUES`` below.
@@ -181,6 +190,97 @@ def ensure_ads_rule_set(doc: dict[str, Any]) -> None:
         )
 
 
+def ensure_fakeip(doc: dict[str, Any]) -> None:
+    """Preserve domains across TUN to proxy outbounds without disabling IPv6.
+
+    Applications receive mapped A/AAAA answers.  When a connection arrives
+    from the TUN, sing-box's FakeIP store restores the original domain before
+    route matching.  Leaving that destination as a domain is intentional:
+    proxy outbounds then send the domain to the remote side, which can choose
+    a reachable CDN address.  A route ``resolve`` action must not be inserted
+    globally here because sing-box converts the recovered domain into local
+    ``DestinationAddresses`` and proxy outbounds receive those literal IPs.
+    """
+
+    dns = doc.setdefault("dns", {})
+    servers = [
+        server
+        for server in as_list(dns.get("servers"))
+        if not (
+            isinstance(server, dict) and server.get("tag") == FAKEIP_SERVER_TAG
+        )
+    ]
+    servers.insert(
+        0,
+        {
+            "tag": FAKEIP_SERVER_TAG,
+            "type": "fakeip",
+            "inet4_range": FAKEIP_INET4_RANGE,
+            "inet6_range": FAKEIP_INET6_RANGE,
+        },
+    )
+    dns["servers"] = servers
+    dns["reverse_mapping"] = True
+
+    dns_rules = clean_rules(dns.get("rules", []))
+    dns_rules = [
+        rule
+        for rule in dns_rules
+        if not (
+            isinstance(rule, dict)
+            and rule.get("server") == FAKEIP_SERVER_TAG
+            and set(as_list(rule.get("query_type"))) == set(FAKEIP_QUERY_TYPES)
+        )
+    ]
+    ad_index = next(
+        (
+            index + 1
+            for index, rule in enumerate(dns_rules)
+            if ADS_RULE_SET in as_list(rule.get("rule_set"))
+            and rule.get("action") == "reject"
+        ),
+        0,
+    )
+    # Keep domestic and explicit direct-mode lookups real.  That preserves
+    # private/LAN address classification and avoids handing synthetic answers
+    # to a direct outbound.  Foreign/global A/AAAA queries then fall through
+    # to FakeIP; the existing global/geolocation DNS rules still handle other
+    # query types through the proxy resolver.
+    real_dns_indices = [
+        index
+        for index, rule in enumerate(dns_rules)
+        if (
+            isinstance(rule, dict)
+            and (
+                "geosite-cn" in as_list(rule.get("rule_set"))
+                or rule.get("clash_mode") == "direct"
+            )
+        )
+    ]
+    insert_index = max([ad_index, *(index + 1 for index in real_dns_indices)])
+    dns_rules.insert(
+        insert_index,
+        {"query_type": list(FAKEIP_QUERY_TYPES), "server": FAKEIP_SERVER_TAG},
+    )
+    dns["rules"] = dns_rules
+
+    cache_file = doc.setdefault("experimental", {}).setdefault("cache_file", {})
+    cache_file["enabled"] = True
+    cache_file["store_fakeip"] = True
+
+    route = doc.setdefault("route", {})
+    route_rules = route.setdefault("rules", [])
+    route["rules"] = [
+        rule
+        for rule in route_rules
+        if not (
+            isinstance(rule, dict)
+            and rule.get("action") == "resolve"
+            and set(rule) <= {"action", "strategy"}
+        )
+    ]
+
+
 def normalize_route_actions(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Use explicit route actions whenever a route rule selects an outbound."""
 
@@ -261,6 +361,45 @@ def ensure_direct_mode_rule(doc: dict[str, Any]) -> None:
     route["rules"] = rules
 
 
+def ensure_quic_fallback_order(doc: dict[str, Any]) -> None:
+    """Keep the generic QUIC reject as the final protocol fallback.
+
+    A bare QUIC reject before service and geolocation rule-sets prevents
+    browser HTTP/3 traffic from reaching the same selected outbound as its
+    TCP/CONNECT counterpart.  Keep the domestic QUIC exception and all
+    rule-set/domain policy ahead of the generic fallback so only otherwise
+    unrouted QUIC is rejected.
+    """
+
+    route = doc.setdefault("route", {})
+    rules = route.setdefault("rules", [])
+    if not isinstance(rules, list):
+        raise TemplateError("route.rules must be a list")
+
+    def is_generic_quic_reject(rule: Any) -> bool:
+        return (
+            isinstance(rule, dict)
+            and rule.get("protocol") == "quic"
+            and rule.get("action") == "reject"
+            and not any(
+                key in rule
+                for key in (
+                    "rule_set",
+                    "domain",
+                    "domain_suffix",
+                    "domain_keyword",
+                    "process_name",
+                )
+            )
+        )
+
+    generic = next((rule for rule in rules if is_generic_quic_reject(rule)), None)
+    if generic is None:
+        return
+    route["rules"] = [rule for rule in rules if not is_generic_quic_reject(rule)]
+    route["rules"].append(generic)
+
+
 def ensure_ipv6_track(doc: dict[str, Any], variant: str) -> None:
     dns = doc.setdefault("dns", {})
     route = doc.setdefault("route", {})
@@ -328,7 +467,9 @@ def transform_document(source: dict[str, Any], variant: str) -> dict[str, Any]:
     dns["rules"] = clean_rules(dns.get("rules", []))
     ensure_ads_rule_set(doc)
     ensure_ads_rules(doc)
+    ensure_fakeip(doc)
     ensure_direct_mode_rule(doc)
+    ensure_quic_fallback_order(doc)
     # ``ensure_ads_rules`` normalizes before inserting; normalize once more so
     # templates with a pre-existing direct/global rule are unambiguous.
     route["rules"] = normalize_route_actions(route.get("rules", []))

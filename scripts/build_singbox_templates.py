@@ -37,6 +37,13 @@ FAKEIP_INET4_RANGE = "198.18.0.0/15"
 FAKEIP_INET6_RANGE = "2001:2::/48"
 FAKEIP_QUERY_TYPES = ["A", "AAAA"]
 
+TAILSCALE_DNS_TAG = "tailscale-dns"
+TAILSCALE_OUTBOUND_TAG = "tailscale-direct"
+TAILSCALE_RESPONSE_TAG = "tailscale-response"
+TAILSCALE_IPV4 = "100.64.0.0/10"
+TAILSCALE_IPV6 = "fd7a:115c:a1e0::/48"
+SINGLE_LABEL_DOMAIN = r"^[^.]+\.?$"
+
 # These are the app-specific rules that the templates previously accumulated.
 # Remote geosite/geoip sets cover them; preserving the user's infrastructure
 # exceptions is handled by ``ALLOWED_DOMAIN_VALUES`` below.
@@ -296,6 +303,78 @@ def normalize_route_actions(rules: list[dict[str, Any]]) -> list[dict[str, Any]]
     return normalized
 
 
+def ensure_external_tailscale(doc: dict[str, Any]) -> None:
+    """Use the existing client; keep Apple excludedRoutes away from 100/10.
+
+    The shared configuration has no private tailnet names or utun number.
+    The local preparation script binds this dedicated outbound to the actual
+    Tailscale interface before SFM activation on macOS.
+    """
+
+    dns = doc.setdefault("dns", {})
+    servers = dns.setdefault("servers", [])
+    if not any(server.get("tag") == TAILSCALE_DNS_TAG for server in servers):
+        servers.append({
+            "type": "udp", "tag": TAILSCALE_DNS_TAG,
+            "server": "100.100.100.100", "server_port": 53,
+            "detour": TAILSCALE_OUTBOUND_TAG,
+        })
+    outbounds = doc.setdefault("outbounds", [])
+    tailscale_outbound = next((outbound for outbound in outbounds
+                              if outbound.get("tag") == TAILSCALE_OUTBOUND_TAG), None)
+    if tailscale_outbound is None:
+        tailscale_outbound = {
+            "type": "direct", "tag": TAILSCALE_OUTBOUND_TAG,
+            "domain_resolver": {"server": TAILSCALE_DNS_TAG},
+        }
+        outbounds.append(tailscale_outbound)
+    # An unspecified explicit bind disables the default dialer's route-loop
+    # protection. Retain default protection until a verified interface is selected.
+    for field, unspecified in (("inet4_bind_address", "0.0.0.0"), ("inet6_bind_address", "::")):
+        if tailscale_outbound.get(field) == unspecified:
+            tailscale_outbound.pop(field)
+
+    names = {
+        "type": "logical", "mode": "or",
+        "rules": [{"domain_suffix": "ts.net"}, {"domain_regex": SINGLE_LABEL_DOMAIN}],
+    }
+    dns_rules = [
+        {**copy.deepcopy(names), "action": "evaluate", "server": TAILSCALE_DNS_TAG,
+         "tag": TAILSCALE_RESPONSE_TAG, "timeout": "1s"},
+        {"match_response": TAILSCALE_RESPONSE_TAG, "response_rcode": "NOERROR",
+         "action": "respond"},
+        {"domain_suffix": "ts.net", "action": "route", "server": "dns_proxy"},
+        {"domain_regex": SINGLE_LABEL_DOMAIN, "action": "route", "server": "dns_resolver"},
+    ]
+    dns["rules"] = [rule for rule in dns.get("rules", []) if rule not in dns_rules]
+    ads_index = next((index + 1 for index, rule in enumerate(dns["rules"])
+                      if ADS_RULE_SET in as_list(rule.get("rule_set"))
+                      and rule.get("action") == "reject"), 0)
+    dns["rules"][ads_index:ads_index] = dns_rules
+
+    # Resolve only possible internal names, then classify the real tailnet
+    # address. Public ts.net names still use normal service/proxy policy.
+    # This is deliberately not an unconditional resolve on public traffic.
+    route_rules = [
+        {**copy.deepcopy(names), "action": "resolve"},
+        {"ip_cidr": [TAILSCALE_IPV4, TAILSCALE_IPV6], "action": "route",
+         "outbound": TAILSCALE_OUTBOUND_TAG},
+    ]
+    route = doc.setdefault("route", {})
+    route["rules"] = [rule for rule in route.get("rules", []) if rule not in route_rules]
+    ads_index = next((index + 1 for index, rule in enumerate(route["rules"])
+                      if ADS_RULE_SET in as_list(rule.get("rule_set"))
+                      and rule.get("action") == "reject"), 0)
+    route["rules"][ads_index:ads_index] = route_rules
+    for inbound in doc.get("inbounds", []):
+        if inbound.get("type") == "tun":
+            # macOS maps excludedRoutes to the physical interface, not to
+            # another VPN. Preserve every other existing exclusion.
+            excluded = inbound.get("route_exclude_address", [])
+            inbound["route_exclude_address"] = [prefix for prefix in excluded
+                                                  if prefix != TAILSCALE_IPV4]
+
+
 def _remove_matching(rules: list[dict[str, Any]], predicate) -> list[dict[str, Any]]:
     return [rule for rule in rules if not predicate(rule)]
 
@@ -456,7 +535,8 @@ def ensure_ipv6_track(doc: dict[str, Any], variant: str) -> None:
         raise TemplateError("source template must exclude fc00::/7 from the TUN")
 
 
-def transform_document(source: dict[str, Any], variant: str) -> dict[str, Any]:
+def transform_document(source: dict[str, Any], variant: str, *,
+                       tailscale_coexist: bool = False) -> dict[str, Any]:
     doc = copy.deepcopy(source)
 
     route = doc.setdefault("route", {})
@@ -468,6 +548,9 @@ def transform_document(source: dict[str, Any], variant: str) -> dict[str, Any]:
     ensure_ads_rule_set(doc)
     ensure_ads_rules(doc)
     ensure_fakeip(doc)
+    if tailscale_coexist or any(server.get("tag") == TAILSCALE_DNS_TAG
+                               for server in dns.get("servers", [])):
+        ensure_external_tailscale(doc)
     ensure_direct_mode_rule(doc)
     ensure_quic_fallback_order(doc)
     # ``ensure_ads_rules`` normalizes before inserting; normalize once more so
@@ -485,7 +568,8 @@ def build_variant(source_path: Path, output_dir: Path, variant: str) -> Path:
     source = load_json(source_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     destination = output_dir / f"{base_stem(source_path)}-{variant}.json"
-    document = transform_document(source, variant)
+    document = transform_document(source, variant,
+                                  tailscale_coexist=not base_stem(source_path).endswith("-ios"))
     with destination.open("w", encoding="utf-8") as handle:
         json.dump(document, handle, ensure_ascii=False, indent=2)
         handle.write("\n")

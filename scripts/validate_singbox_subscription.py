@@ -232,6 +232,13 @@ def check_document(
         for server in dns_servers
         if isinstance(server, dict) and isinstance(server.get("tag"), str)
     }
+    if "tailscale-dns" in dns_server_tags or "tailscale-direct" in outbound_tag_set:
+        for inbound in doc.get("inbounds", []):
+            if (inbound.get("type") == "tun"
+                    and "100.64.0.0/10" in as_list(inbound.get("route_exclude_address"))):
+                failures.append(
+                    f"{label}: Tailscale 100.64.0.0/10 must not be an Apple TUN excluded route"
+                )
     rule_set_tags = {
         rule_set.get("tag")
         for rule_set in route_rule_sets

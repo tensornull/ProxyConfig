@@ -129,6 +129,18 @@ class ValidatorPolicyTests(unittest.TestCase):
     def test_v6_policy_passes_without_ipv6_reject(self):
         self.assertEqual(self.validate(policy_document("v6"), "v6"), [])
 
+    def test_tailscale_rejects_physical_interface_exclusion(self):
+        document = policy_document("v6")
+        document["outbounds"].append({"type": "direct", "tag": "tailscale-direct"})
+        document["inbounds"][0]["route_exclude_address"].append("100.64.0.0/10")
+        failures = self.validate(document, "v6")
+        self.assertTrue(any("Apple TUN excluded route" in failure for failure in failures))
+
+    def test_tailscale_without_physical_interface_exclusion_passes(self):
+        document = policy_document("v6")
+        document["outbounds"].append({"type": "direct", "tag": "tailscale-direct"})
+        self.assertEqual(self.validate(document, "v6"), [])
+
     def test_v4_requires_pre_sniff_ipv6_reject(self):
         document = policy_document("v4")
         document["route"]["rules"].pop(0)

@@ -36,6 +36,116 @@ domain into a local IP literal before the proxy outbound, recreating the
 failure this path is meant to avoid. Applications that use their own DoH/DoQ
 resolver or hard-coded IPs remain outside TUN DNS interception.
 
+## macOS: existing Tailscale client and SFM
+
+The nine non-iOS templates include external-client coexistence rules for
+sing-box 1.14 or newer. MagicDNS full names under `ts.net` and single-label
+names are evaluated through Quad100 before public DNS and FakeIP rules.
+A successful response is returned, including an empty successful AAAA answer;
+errors, negative replies, and a one-second timeout fall back to the existing
+public resolver for `ts.net` or `dns_resolver` for single-label names.
+Tailnet addresses take the dedicated direct outbound before proxy mode rules.
+The iOS templates do not include these rules.
+
+On macOS, the shared `tailscale-direct` outbound is an unbound skeleton.
+It keeps the ordinary dialer's default-interface protection, which does not
+select another VPN's interface-scoped route. Do not use the raw template or
+its expanded remote subscription as an activated, validated macOS coexistence
+configuration: first run the local preparation step below, which verifies
+that the discovered interface owns this client's Tailscale address before
+binding it. The existing external client must be running; these templates
+do not start a Tailscale node.
+
+Keep the existing Tailscale client and its device identity. Let SFM handle the
+system's public DNS, while its DNS rules send MagicDNS queries to the existing
+client's `100.100.100.100` service. Disabling Tailscale's `accept-dns` preference
+removes its system resolver configuration; it keeps the client connected and
+the local MagicDNS query service available.
+
+Prepare an expanded local SFM configuration with the existing real proxy nodes:
+
+```sh
+python3 scripts/prepare_singbox_tailscale.py \
+  --source /path/to/expanded-sfm-config.json \
+  --output-dir sing-box/.tmp/template-tests/tailscale-coexist-local \
+  --preserve-current-selections
+```
+
+The script reads the running Tailscale client's tailnet suffix and peer names,
+then produces two private local configurations. Use
+`tailscale-coexist-fakeip.json` for the smallest change: it preserves public
+FakeIP behavior and adds MagicDNS routing before the generic rules.
+`tailscale-coexist-real-dns.json` is an optional alternative that sends public
+queries to the existing real DNS servers. Both preserve IPv6 and proxy nodes.
+The outputs contain subscription credentials, stay under the ignored task
+directory, and have mode `0600`. The generator runs structural validation with
+real-node requirements and `sing-box check`; it does not activate either client
+or replace a remote subscription.
+
+The dedicated `tailscale-direct` outbound binds to the existing Tailscale
+interface discovered from the Quad100 route. The interface name is generated
+locally and must not be hard-coded in shared templates. Regenerate the local
+configuration if restarting either VPN changes that interface.
+
+Do not put `100.64.0.0/10` in the TUN's `route_exclude_address` on macOS.
+Apple's excluded routes explicitly send traffic to the primary physical
+interface; they can override Tailscale's interface-scoped route and break
+ordinary SSH to `100.x` peers. The generator removes that exclusion and retains
+the existing IPv6 private range exclusion. Verify IPv4 and IPv6 peer connections
+after activating SFM. Public traffic retains its existing dialer and proxy rules.
+
+Public names under `ts.net`, such as Funnel names, are a narrow exception:
+they are resolved to real addresses before normal proxy routing. Other public
+domains retain their existing FakeIP behavior.
+
+Import the prepared configuration as a new local profile in SFM and start it.
+Confirm that the MagicDNS full name and its short name resolve through SFM,
+and that an existing tailnet service is reachable. Then change only Tailscale's
+system DNS acceptance:
+
+```sh
+TAILSCALE_BE_CLI=1 /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+  set --accept-dns=false
+```
+
+After the switch, verify public HTTPS through the system TUN, MagicDNS full and
+short names, and the existing tailnet connection. Check `scutil --dns` to ensure
+Quad100 no longer owns the system's public DNS. On failure, restore DNS
+acceptance before switching SFM back to its original profile:
+
+```sh
+TAILSCALE_BE_CLI=1 /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+  set --accept-dns=true
+```
+
+The local preparation adds exact short names and shared-peer full names from
+the existing client's live peer list, including offline peers. With the new
+templates, the generic Quad100 rules also cover newly added or renamed peers
+without a list update. Other single-label names are tried against MagicDNS
+before falling back to the template's `dns_resolver`; that public resolver
+does not provide arbitrary LAN-only names. If a LAN device and a tailnet
+device share a name, use their full names to distinguish them.
+
+The standard public `ts.net` parent rule uses the existing public recursive DNS
+server after known MagicDNS names. Other split DNS routes retain their first
+bare-IP UDP resolver, with more specific suffixes matched first. Encrypted,
+custom-port, empty-upstream, and redundant-resolver configurations need separate
+review; the generator does not reproduce Tailscale's concurrent resolver races.
+Extra A/AAAA records must point to tailnet addresses; public or LAN records
+need separate DNS and route review, rather than being bound to Tailscale.
+SFM's NetworkExtension needs actual activation testing in addition to CLI
+checks, because its routing context differs from a standalone process.
+
+The sing-box built-in [Tailscale endpoint](https://sing-box.sagernet.org/configuration/endpoint/tailscale/)
+creates its own Tailscale node. Its [Tailscale DNS server](https://sing-box.sagernet.org/configuration/dns/server/tailscale/)
+references that endpoint; it does not adopt the existing macOS client identity.
+The external-client coexistence configuration uses a UDP DNS server instead.
+See [Tailscale DNS](https://tailscale.com/docs/reference/dns-in-tailscale) and
+[MagicDNS](https://tailscale.com/docs/features/magicdns), sing-box's
+[DNS evaluate/respond actions](https://sing-box.sagernet.org/configuration/dns/rule_action/)
+and [interface binding](https://sing-box.sagernet.org/configuration/shared/dial/),
+and Apple's [excluded routes](https://developer.apple.com/documentation/networkextension/neipv4settings/excludedroutes).
+
 ## Build and test
 
 Generate a pilot pair from the automatic template:

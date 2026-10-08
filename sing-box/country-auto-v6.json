@@ -43,12 +43,50 @@
         "type": "udp",
         "server": "119.29.29.29",
         "server_port": 53
+      },
+      {
+        "type": "udp",
+        "tag": "tailscale-dns",
+        "server": "100.100.100.100",
+        "server_port": 53,
+        "detour": "tailscale-direct"
       }
     ],
     "rules": [
       {
         "rule_set": "geosite-category-ads-all",
         "action": "reject"
+      },
+      {
+        "type": "logical",
+        "mode": "or",
+        "rules": [
+          {
+            "domain_suffix": "ts.net"
+          },
+          {
+            "domain_regex": "^[^.]+\\.?$"
+          }
+        ],
+        "action": "evaluate",
+        "server": "tailscale-dns",
+        "tag": "tailscale-response",
+        "timeout": "1s"
+      },
+      {
+        "match_response": "tailscale-response",
+        "response_rcode": "NOERROR",
+        "action": "respond"
+      },
+      {
+        "domain_suffix": "ts.net",
+        "action": "route",
+        "server": "dns_proxy"
+      },
+      {
+        "domain_regex": "^[^.]+\\.?$",
+        "action": "route",
+        "server": "dns_resolver"
       },
       {
         "rule_set": "geosite-cn",
@@ -382,6 +420,13 @@
     {
       "type": "direct",
       "tag": "direct"
+    },
+    {
+      "type": "direct",
+      "tag": "tailscale-direct",
+      "domain_resolver": {
+        "server": "tailscale-dns"
+      }
     }
   ],
   "route": {
@@ -403,6 +448,27 @@
       {
         "rule_set": "geosite-category-ads-all",
         "action": "reject"
+      },
+      {
+        "type": "logical",
+        "mode": "or",
+        "rules": [
+          {
+            "domain_suffix": "ts.net"
+          },
+          {
+            "domain_regex": "^[^.]+\\.?$"
+          }
+        ],
+        "action": "resolve"
+      },
+      {
+        "ip_cidr": [
+          "100.64.0.0/10",
+          "fd7a:115c:a1e0::/48"
+        ],
+        "action": "route",
+        "outbound": "tailscale-direct"
       },
       {
         "protocol": "quic",

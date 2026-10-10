@@ -104,7 +104,7 @@ ROUTE_PROBES = (
     ("github.com", "🛩️ NodeSelected"),
     ("github.githubassets.com", "🛩️ NodeSelected"),
     ("store.steampowered.com", "🎮 Other"),
-    ("ad.ozone.ru", "reject"),
+    ("ad.ozone.ru", "🌱 Purification"),
 )
 MODE_PROBES = (
     ("rule", "default", "😮‍💨 Final"),
@@ -317,19 +317,21 @@ def check_route_references(
     ads_index = first_index(
         rules,
         lambda rule: ADS_RULE_SET in as_list(rule.get("rule_set"))
-        and rule.get("action") == "reject",
+        and rule.get("action") == "route"
+        and rule.get("outbound") == "🌱 Purification",
     )
     if ads_index is None:
-        result.fail(f"{label}: route ad reject missing")
+        result.fail(f"{label}: route Purification rule missing")
     elif cn_index is not None and ads_index >= cn_index:
-        result.fail(f"{label}: route ad reject must precede geosite-cn")
+        result.fail(f"{label}: route Purification rule must precede geosite-cn")
     direct_index = first_index(
         rules,
         lambda rule: rule.get("clash_mode") == "direct",
     )
     global_index = first_index(
         rules,
-        lambda rule: rule.get("clash_mode") == "global",
+        lambda rule: rule.get("clash_mode") == "global"
+        and "rule_set" not in rule,
     )
     if direct_index is None or not (
         rules[direct_index].get("action") == "route"
@@ -346,7 +348,7 @@ def check_route_references(
         for index in (direct_index, global_index)
         if index is not None
     ):
-        result.fail(f"{label}: route ad reject must precede direct/global mode rules")
+        result.fail(f"{label}: route Purification rule must precede direct/global mode rules")
     quic_allow = first_index(
         rules,
         lambda rule: rule.get("protocol") == "quic"
@@ -517,7 +519,7 @@ def check_fakeip(label: str, doc: dict[str, Any], result: CheckResult) -> None:
             index
             for index, rule in enumerate(dns_rules)
             if "geosite-geolocation-!cn" in as_list(rule.get("rule_set"))
-            or rule.get("clash_mode") == "global"
+            or (rule.get("clash_mode") == "global" and "rule_set" not in rule)
         ]
         if proxy_dns_indices and fake_index >= min(proxy_dns_indices):
             result.fail(
@@ -557,16 +559,16 @@ def check_document(label: str, doc: dict[str, Any]) -> CheckResult:
     dns_ads_index = first_index(
         dns_rules,
         lambda rule: ADS_RULE_SET in as_list(rule.get("rule_set"))
-        and rule.get("action") == "reject",
+        and rule.get("server") == "fakeip",
     )
     dns_cn_index = first_index(
         dns_rules,
         lambda rule: "geosite-cn" in as_list(rule.get("rule_set")),
     )
     if dns_ads_index is None:
-        result.fail(f"{label}: DNS ad reject missing")
+        result.fail(f"{label}: DNS ad FakeIP rule missing")
     elif dns_cn_index is not None and dns_ads_index >= dns_cn_index:
-        result.fail(f"{label}: DNS ad reject must precede geosite-cn")
+        result.fail(f"{label}: DNS ad FakeIP rule must precede geosite-cn")
 
     check_selector_references(label, doc, result)
     check_dns_references(label, doc, result)
@@ -599,6 +601,27 @@ def check_document(label: str, doc: dict[str, Any]) -> CheckResult:
         result.fail(f"{label}: Steam selector/default missing")
     elif "🇯🇵 Japan" in (steam.get("outbounds") or []):
         result.fail(f"{label}: Steam selector unexpectedly includes Japan")
+    purification = next(
+        (
+            item
+            for item in outbounds
+            if isinstance(item, dict) and item.get("tag") == "🌱 Purification"
+        ),
+        None,
+    )
+    if not isinstance(purification, dict) or purification.get("type") != "selector":
+        result.fail(f"{label}: Purification selector missing")
+    else:
+        members = purification.get("outbounds") or []
+        if purification.get("default") != "direct" or not {
+            "direct",
+            "reject",
+            "🛩️ NodeSelected",
+        }.issubset(members):
+            result.fail(
+                f"{label}: Purification selector must default to direct and expose "
+                "reject/NodeSelected"
+            )
     result.stats = {
         "outbound_count": len(outbounds),
         "rule_set_count": len(tags),

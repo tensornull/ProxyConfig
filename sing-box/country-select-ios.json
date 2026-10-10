@@ -48,7 +48,7 @@
     "rules": [
       {
         "rule_set": "geosite-category-ads-all",
-        "action": "reject"
+        "server": "fakeip"
       },
       {
         "domain": [
@@ -240,6 +240,16 @@
       "default": "🛩️ NodeSelected"
     },
     {
+      "tag": "🌱 Purification",
+      "type": "selector",
+      "outbounds": [
+        "direct",
+        "reject",
+        "🛩️ NodeSelected"
+      ],
+      "default": "direct"
+    },
+    {
       "tag": "😮‍💨 Final",
       "type": "selector",
       "outbounds": [
@@ -339,6 +349,10 @@
     {
       "type": "direct",
       "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "reject"
     }
   ],
   "route": {
@@ -359,7 +373,8 @@
       },
       {
         "rule_set": "geosite-category-ads-all",
-        "action": "reject"
+        "action": "route",
+        "outbound": "🌱 Purification"
       },
       {
         "protocol": "quic",

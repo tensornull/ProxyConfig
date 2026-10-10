@@ -25,7 +25,11 @@ def policy_document(variant: str) -> dict:
     route_rules = [
         {"action": "sniff"},
         {"protocol": "dns", "action": "hijack-dns"},
-        {"rule_set": ADS_RULE_SET, "action": "reject"},
+        {
+            "rule_set": ADS_RULE_SET,
+            "action": "route",
+            "outbound": "🌱 Purification",
+        },
         {
             "protocol": "quic",
             "rule_set": ["geosite-cn", "geoip-cn"],
@@ -56,9 +60,13 @@ def policy_document(variant: str) -> dict:
         "dns": {
             "strategy": "ipv4_only" if variant == "v4" else "prefer_ipv6",
             "final": "dns_resolver",
-            "servers": [{"tag": "dns_resolver"}, {"tag": "dns_proxy"}],
+            "servers": [
+                {"tag": "fakeip", "type": "fakeip"},
+                {"tag": "dns_resolver"},
+                {"tag": "dns_proxy"},
+            ],
             "rules": [
-                {"rule_set": ADS_RULE_SET, "action": "reject"},
+                {"rule_set": ADS_RULE_SET, "server": "fakeip"},
                 {"rule_set": "geosite-cn", "server": "dns_resolver"},
                 {"clash_mode": "direct", "server": "dns_resolver"},
                 {"clash_mode": "global", "server": "dns_proxy"},
@@ -84,6 +92,7 @@ def policy_document(variant: str) -> dict:
         },
         "outbounds": [
             {"type": "direct", "tag": "direct"},
+            {"type": "block", "tag": "reject"},
             {"type": "trojan", "tag": "node"},
             {
                 "type": "selector",
@@ -102,6 +111,12 @@ def policy_document(variant: str) -> dict:
                 "tag": "🎯 Foreign",
                 "outbounds": ["🛩️ NodeSelected"],
                 "default": "🛩️ NodeSelected",
+            },
+            {
+                "type": "selector",
+                "tag": "🌱 Purification",
+                "outbounds": ["direct", "reject", "🛩️ NodeSelected"],
+                "default": "direct",
             },
             {
                 "type": "selector",
@@ -170,7 +185,12 @@ class ValidatorPolicyTests(unittest.TestCase):
 
     def test_ads_must_precede_business_rules(self):
         document = policy_document("v4")
-        ads_rule = document["route"]["rules"].pop(3)
+        ads_index = next(
+            index
+            for index, rule in enumerate(document["route"]["rules"])
+            if rule.get("rule_set") == ADS_RULE_SET
+        )
+        ads_rule = document["route"]["rules"].pop(ads_index)
         document["route"]["rules"].append(ads_rule)
         failures = self.validate(document, "v4")
         self.assertTrue(any("business/mode" in failure for failure in failures))

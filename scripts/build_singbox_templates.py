@@ -27,6 +27,8 @@ ADS_RULE_SET_URL = (
     "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/"
     "geo/geosite/category-ads-all.srs"
 )
+AD_SELECTOR_TAG = "🌱 Purification"
+AD_REJECT_TAG = "reject"
 
 # Keep the application-facing address synthetic while retaining the original
 # domain for route matching and proxy protocols.  The IPv6 range is the public
@@ -348,8 +350,7 @@ def ensure_external_tailscale(doc: dict[str, Any]) -> None:
     ]
     dns["rules"] = [rule for rule in dns.get("rules", []) if rule not in dns_rules]
     ads_index = next((index + 1 for index, rule in enumerate(dns["rules"])
-                      if ADS_RULE_SET in as_list(rule.get("rule_set"))
-                      and rule.get("action") == "reject"), 0)
+                      if ADS_RULE_SET in as_list(rule.get("rule_set"))), 0)
     dns["rules"][ads_index:ads_index] = dns_rules
 
     # Resolve only possible internal names, then classify the real tailnet
@@ -363,8 +364,7 @@ def ensure_external_tailscale(doc: dict[str, Any]) -> None:
     route = doc.setdefault("route", {})
     route["rules"] = [rule for rule in route.get("rules", []) if rule not in route_rules]
     ads_index = next((index + 1 for index, rule in enumerate(route["rules"])
-                      if ADS_RULE_SET in as_list(rule.get("rule_set"))
-                      and rule.get("action") == "reject"), 0)
+                      if ADS_RULE_SET in as_list(rule.get("rule_set"))), 0)
     route["rules"][ads_index:ads_index] = route_rules
     for inbound in doc.get("inbounds", []):
         if inbound.get("type") == "tun":
@@ -375,12 +375,59 @@ def ensure_external_tailscale(doc: dict[str, Any]) -> None:
                                                   if prefix != TAILSCALE_IPV4]
 
 
+def ensure_ad_selector(doc: dict[str, Any]) -> None:
+    """Expose the ad policy as a selectable route group.
+
+    DNS resolves ad domains through FakeIP and the route selector chooses
+    direct, reject, or the normal node selector in every Clash mode.
+    """
+
+    outbounds = doc.setdefault("outbounds", [])
+    if not isinstance(outbounds, list):
+        raise TemplateError("outbounds must be a list")
+
+    outbounds[:] = [
+        outbound
+        for outbound in outbounds
+        if not (
+            isinstance(outbound, dict)
+            and outbound.get("tag") in {AD_SELECTOR_TAG, AD_REJECT_TAG}
+        )
+    ]
+
+    direct_index = next(
+        (
+            index
+            for index, outbound in enumerate(outbounds)
+            if isinstance(outbound, dict) and outbound.get("tag") == "direct"
+        ),
+        len(outbounds),
+    )
+    outbounds.insert(direct_index + 1, {"type": "block", "tag": AD_REJECT_TAG})
+
+    selector = {
+        "tag": AD_SELECTOR_TAG,
+        "type": "selector",
+        "outbounds": ["direct", AD_REJECT_TAG, "🛩️ NodeSelected"],
+        "default": "direct",
+    }
+    final_index = next(
+        (
+            index
+            for index, outbound in enumerate(outbounds)
+            if isinstance(outbound, dict) and outbound.get("tag") == "😮‍💨 Final"
+        ),
+        len(outbounds),
+    )
+    outbounds.insert(final_index, selector)
+
+
 def _remove_matching(rules: list[dict[str, Any]], predicate) -> list[dict[str, Any]]:
     return [rule for rule in rules if not predicate(rule)]
 
 
 def ensure_ads_rules(doc: dict[str, Any]) -> None:
-    """Insert remote ad rejection before CN and mode/business rules."""
+    """Insert selectable ad policy before CN and mode/business rules."""
 
     dns = doc.setdefault("dns", {})
     dns_rules = clean_rules(dns.get("rules", []))
@@ -388,8 +435,10 @@ def ensure_ads_rules(doc: dict[str, Any]) -> None:
         dns_rules,
         lambda rule: ADS_RULE_SET in as_list(rule.get("rule_set")),
     )
-    # Keep user DNS exceptions after the ad block and before geosite-cn.
-    dns_rules.insert(0, {"rule_set": ADS_RULE_SET, "action": "reject"})
+    # Resolve through FakeIP so the route selector below can choose a policy.
+    # The selector's ``reject`` member provides the opt-in hard block without
+    # making DNS rejection bypass the user's selection.
+    dns_rules.insert(0, {"rule_set": ADS_RULE_SET, "server": FAKEIP_SERVER_TAG})
     dns["rules"] = dns_rules
 
     route = doc.setdefault("route", {})
@@ -399,14 +448,21 @@ def ensure_ads_rules(doc: dict[str, Any]) -> None:
         lambda rule: ADS_RULE_SET in as_list(rule.get("rule_set")),
     )
 
-    # Put the ad reject after the sniff/DNS-hijack prefix.  It must be before
-    # the first mode rule and all business rule-sets, while DNS hijack remains
-    # the first handler for DNS packets.
+    # Put the selectable ad route after the sniff/DNS-hijack prefix.  It must
+    # be before the first mode rule and all business rule-sets, while DNS
+    # hijack remains the first handler for DNS packets.
     prefix_end = 0
     for index, rule in enumerate(route_rules):
         if rule.get("action") in {"sniff", "hijack-dns"}:
             prefix_end = index + 1
-    route_rules.insert(prefix_end, {"rule_set": ADS_RULE_SET, "action": "reject"})
+    route_rules.insert(
+        prefix_end,
+        {
+            "rule_set": ADS_RULE_SET,
+            "action": "route",
+            "outbound": AD_SELECTOR_TAG,
+        },
+    )
     route["rules"] = route_rules
 
 
@@ -429,7 +485,11 @@ def ensure_direct_mode_rule(doc: dict[str, Any]) -> None:
         (
             index
             for index, item in enumerate(rules)
-            if isinstance(item, dict) and item.get("clash_mode") == "global"
+            if (
+                isinstance(item, dict)
+                and item.get("clash_mode") == "global"
+                and "rule_set" not in item
+            )
         ),
         len(rules),
     )
@@ -546,6 +606,7 @@ def transform_document(source: dict[str, Any], variant: str, *,
     )
     dns["rules"] = clean_rules(dns.get("rules", []))
     ensure_ads_rule_set(doc)
+    ensure_ad_selector(doc)
     ensure_ads_rules(doc)
     ensure_fakeip(doc)
     if tailscale_coexist or any(server.get("tag") == TAILSCALE_DNS_TAG

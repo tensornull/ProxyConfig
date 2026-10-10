@@ -19,7 +19,9 @@ The target families are:
   defaults.
 
 All service-specific routing stays in remote rule-sets. The templates keep the
-remote `geosite-category-ads-all` set for optional ad rejection, but contain no
+remote `geosite-category-ads-all` set behind the `🌱 Purification` selector,
+which defaults to `direct` and also exposes `reject` and `🛩️ NodeSelected` for
+testing. The templates contain no
 hand-written ad hosts, process rules, or WeChat/QQ/Taobao app lists. Domestic
 traffic continues to use `geosite-cn`/`geoip-cn`, while
 `geosite-geolocation-!cn` and the service rule-sets handle foreign traffic.
@@ -49,12 +51,14 @@ The iOS templates do not include these rules.
 
 On macOS, the shared `tailscale-direct` outbound is an unbound skeleton.
 It keeps the ordinary dialer's default-interface protection, which does not
-select another VPN's interface-scoped route. Do not use the raw template or
-its expanded remote subscription as an activated, validated macOS coexistence
-configuration: first run the local preparation step below, which verifies
-that the discovered interface owns this client's Tailscale address before
-binding it. The existing external client must be running; these templates
-do not start a Tailscale node.
+select another VPN's interface-scoped route. The preparation step below only
+creates a private candidate and runs structural/sing-box checks; it does not
+prove that SFM's NetworkExtension can send a second VPN's traffic through the
+candidate. In particular, an activated SFM 1.14.2 profile can still log
+`dial en0` for a `100.64.0.0/10` peer, and binding the peer's `utun` or source
+address is not a portable fix. Treat the candidate as a diagnostic artifact
+until an actual SFM activation test succeeds. The existing external client
+must be running; these templates do not start a Tailscale node.
 
 Keep the existing Tailscale client and its device identity. Let SFM handle the
 system's public DNS, while its DNS rules send MagicDNS queries to the existing
@@ -82,10 +86,12 @@ directory, and have mode `0600`. The generator runs structural validation with
 real-node requirements and `sing-box check`; it does not activate either client
 or replace a remote subscription.
 
-The dedicated `tailscale-direct` outbound binds to the existing Tailscale
+The local candidate can bind `tailscale-direct` to the existing Tailscale
 interface discovered from the Quad100 route. The interface name is generated
 locally and must not be hard-coded in shared templates. Regenerate the local
-configuration if restarting either VPN changes that interface.
+candidate if restarting either VPN changes that interface, then test both the
+native OS path and the SFM SOCKS/TUN path; they are separate NetworkExtension
+paths on macOS.
 
 Do not put `100.64.0.0/10` in the TUN's `route_exclude_address` on macOS.
 Apple's excluded routes explicitly send traffic to the primary physical
@@ -98,10 +104,10 @@ Public names under `ts.net`, such as Funnel names, are a narrow exception:
 they are resolved to real addresses before normal proxy routing. Other public
 domains retain their existing FakeIP behavior.
 
-Import the prepared configuration as a new local profile in SFM and start it.
-Confirm that the MagicDNS full name and its short name resolve through SFM,
-and that an existing tailnet service is reachable. Then change only Tailscale's
-system DNS acceptance:
+If the activation test succeeds, import the prepared configuration as a new
+local profile in SFM and start it. Confirm that the MagicDNS full name and its
+short name resolve through SFM, and that an existing tailnet service is
+reachable. Then change only Tailscale's system DNS acceptance:
 
 ```sh
 TAILSCALE_BE_CLI=1 /Applications/Tailscale.app/Contents/MacOS/Tailscale \

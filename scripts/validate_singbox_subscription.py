@@ -37,6 +37,8 @@ FALLBACK_ONLY_TAGS = {"Proxy", "direct"}
 PLACEHOLDER_RE = re.compile(r"^\{[^{}]+\}$")
 WARNING_RE = re.compile(r"deprecated|legacy|warning|warn", re.IGNORECASE)
 ADS_RULE_SET = "geosite-category-ads-all"
+AD_SELECTOR_TAG = "🌱 Purification"
+AD_REJECT_TAG = "reject"
 REQUIRED_POLICY_RULE_SETS = {
     "geosite-cn",
     "geoip-cn",
@@ -319,6 +321,33 @@ def check_document(
             if default not in members:
                 failures.append(f"{label}: {owner}: default outbound {default} is not a member")
 
+    ad_selector = next(
+        (
+            ob
+            for ob in outbounds
+            if isinstance(ob, dict) and ob.get("tag") == AD_SELECTOR_TAG
+        ),
+        None,
+    )
+    selectable_ads = ad_selector is not None
+    if selectable_ads and ad_selector.get("type") != "selector":
+        failures.append(f"{label}: {AD_SELECTOR_TAG} is not a selector")
+    elif selectable_ads:
+        ad_members = ad_selector.get("outbounds") or []
+        required_ad_members = {"direct", AD_REJECT_TAG, "🛩️ NodeSelected"}
+        if ad_selector.get("default") != "direct" or not required_ad_members.issubset(ad_members):
+            failures.append(
+                f"{label}: {AD_SELECTOR_TAG} must default to direct and expose "
+                f"{AD_REJECT_TAG}/🛩️ NodeSelected"
+            )
+        if not any(
+            isinstance(ob, dict)
+            and ob.get("tag") == AD_REJECT_TAG
+            and ob.get("type") == "block"
+            for ob in outbounds
+        ):
+            failures.append(f"{label}: {AD_REJECT_TAG} block outbound is missing")
+
     route_final = route.get("final")
     if route_final and route_final not in outbound_tag_set:
         failures.append(f"{label}: route.final outbound {route_final} is missing")
@@ -366,39 +395,92 @@ def check_document(
     ):
         failures.append(f"{label}: {ADS_RULE_SET} must be a remote rule-set")
 
-    # The ad rule-set must be evaluated before CN routing in DNS and before
-    # business/mode routing in the route table.  This leaves service-specific
-    # remote rules intact while preventing a CN catch-all from winning first.
-    for scope, rules in (("dns", dns_rules), ("route", route_rules)):
-        ads_reject_indices = [
+    if selectable_ads:
+        # Resolve ad domains through FakeIP before CN DNS rules, then route
+        # them through the selectable policy before business/mode rules.
+        dns_ad_indices = [
             index
-            for index, rule in enumerate(rules)
+            for index, rule in enumerate(dns_rules)
             if isinstance(rule, dict)
             and ADS_RULE_SET in as_list(rule.get("rule_set"))
-            and rule.get("action") == "reject"
+            and rule.get("server") == "fakeip"
         ]
-        if not ads_reject_indices:
-            failures.append(f"{label}: {scope} has no {ADS_RULE_SET} reject rule")
-            continue
-        ads_index = min(ads_reject_indices)
-        if scope == "dns":
+        if not dns_ad_indices:
+            failures.append(f"{label}: dns has no {ADS_RULE_SET} FakeIP rule")
+        else:
             cn_index = first_rule_index(
-                rules,
+                dns_rules,
                 lambda rule: "geosite-cn" in as_list(rule.get("rule_set")),
             )
-            if cn_index is not None and ads_index > cn_index:
+            if cn_index is not None and min(dns_ad_indices) > cn_index:
                 failures.append(
-                    f"{label}: dns {ADS_RULE_SET} reject must precede geosite-cn"
+                    f"{label}: dns {ADS_RULE_SET} FakeIP rule must precede geosite-cn"
                 )
+
+        route_ad_indices = [
+            index
+            for index, rule in enumerate(route_rules)
+            if isinstance(rule, dict)
+            and ADS_RULE_SET in as_list(rule.get("rule_set"))
+            and rule.get("action") == "route"
+            and rule.get("outbound") == AD_SELECTOR_TAG
+        ]
+        if not route_ad_indices:
+            failures.append(f"{label}: route has no {ADS_RULE_SET} selector rule")
         else:
-            business_index = first_rule_index(
-                rules,
-                lambda rule: bool(rule.get("outbound")) or bool(rule.get("clash_mode")),
+            cn_index = first_rule_index(
+                route_rules,
+                lambda rule: "geosite-cn" in as_list(rule.get("rule_set")),
             )
-            if business_index is not None and ads_index > business_index:
+            mode_indices = [
+                index
+                for index, rule in enumerate(route_rules)
+                if isinstance(rule, dict)
+                and rule.get("clash_mode") in {"direct", "global"}
+                and "rule_set" not in rule
+            ]
+            if cn_index is not None and min(route_ad_indices) > cn_index:
                 failures.append(
-                    f"{label}: route {ADS_RULE_SET} reject must precede business/mode rules"
+                    f"{label}: route {ADS_RULE_SET} selector must precede geosite-cn"
                 )
+            if mode_indices and min(route_ad_indices) > min(mode_indices):
+                failures.append(
+                    f"{label}: route {ADS_RULE_SET} selector must precede business/mode rules"
+                )
+    else:
+        # Accept a previously generated final subscription until SFM is
+        # refreshed with the selectable template.  Keep the original reject
+        # ordering gate for that legacy output.
+        for scope, rules in (("dns", dns_rules), ("route", route_rules)):
+            ads_reject_indices = [
+                index
+                for index, rule in enumerate(rules)
+                if isinstance(rule, dict)
+                and ADS_RULE_SET in as_list(rule.get("rule_set"))
+                and rule.get("action") == "reject"
+            ]
+            if not ads_reject_indices:
+                failures.append(f"{label}: {scope} has no {ADS_RULE_SET} policy")
+                continue
+            ads_index = min(ads_reject_indices)
+            if scope == "dns":
+                cn_index = first_rule_index(
+                    rules,
+                    lambda rule: "geosite-cn" in as_list(rule.get("rule_set")),
+                )
+                if cn_index is not None and ads_index > cn_index:
+                    failures.append(
+                        f"{label}: dns {ADS_RULE_SET} reject must precede geosite-cn"
+                    )
+            else:
+                business_index = first_rule_index(
+                    rules,
+                    lambda rule: bool(rule.get("outbound")) or bool(rule.get("clash_mode")),
+                )
+                if business_index is not None and ads_index > business_index:
+                    failures.append(
+                        f"{label}: route {ADS_RULE_SET} reject must precede business/mode rules"
+                    )
 
     # Keep the three user-facing mode choices explicit.  Direct is required for
     # local testing and Global remains the existing NodeSelected override.
@@ -554,6 +636,7 @@ def check_document(
         "dns_strategy": dns.get("strategy"),
         "rule_set_count": len(rule_set_tags),
         "ads_rule_set": ADS_RULE_SET in rule_set_tags,
+        "selectable_ads": selectable_ads,
         "pre_sniff_ipv6_tcp_reject": has_pre_sniff_ipv6_tcp_reject(route_rules),
     }
     return failures, stats
@@ -768,7 +851,8 @@ def main() -> int:
             f"{label}: outbounds={stats['outbound_count']} "
             f"proxy_direct={stats['proxy_direct_count']} "
             f"variant={stats['variant']} "
-            f"dns_strategy={stats['dns_strategy']}"
+            f"dns_strategy={stats['dns_strategy']} "
+            f"selectable_ads={stats['selectable_ads']}"
         )
 
     print("local_templates_json_ok=true")
@@ -808,7 +892,8 @@ def main() -> int:
                 f"outbounds={final_stats['outbound_count']} "
                 f"real_proxy_node_count={final_stats['real_proxy_node_count']} "
                 f"proxy_direct={final_stats['proxy_direct_count']} "
-                f"country_fallback_only={final_stats['country_fallback_only_count']}"
+                f"country_fallback_only={final_stats['country_fallback_only_count']} "
+                f"selectable_ads={final_stats['selectable_ads']}"
             )
 
     if sing_box is None:

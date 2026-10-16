@@ -146,7 +146,16 @@
     {
       "type": "mixed",
       "listen": "127.0.0.1",
-      "listen_port": 2080
+      "listen_port": 2080,
+      "reuse_addr": true
+    },
+    {
+      "type": "mixed",
+      "tag": "lan-mixed",
+      "listen": "0.0.0.0",
+      "listen_port": 2080,
+      "reuse_addr": true,
+      "bind_interface": "en0"
     }
   ],
   "outbounds": [
@@ -175,7 +184,7 @@
     {
       "tag": "⚡️ Auto",
       "type": "urltest",
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "http://cp.cloudflare.com/generate_204",
       "interval": "1m",
       "tolerance": 50,
       "outbounds": [
@@ -322,7 +331,7 @@
     {
       "tag": "🇭🇰 Hong Kong",
       "type": "urltest",
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "http://cp.cloudflare.com/generate_204",
       "interval": "1m",
       "tolerance": 50,
       "outbounds": [
@@ -346,7 +355,7 @@
     {
       "tag": "🇹🇼 Taiwan",
       "type": "urltest",
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "http://cp.cloudflare.com/generate_204",
       "interval": "1m",
       "tolerance": 50,
       "outbounds": [
@@ -364,7 +373,7 @@
     {
       "tag": "🇯🇵 Japan",
       "type": "urltest",
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "http://cp.cloudflare.com/generate_204",
       "interval": "1m",
       "tolerance": 50,
       "outbounds": [
@@ -382,7 +391,7 @@
     {
       "tag": "🇸🇬 Singapore",
       "type": "urltest",
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "http://cp.cloudflare.com/generate_204",
       "interval": "1m",
       "tolerance": 50,
       "outbounds": [
@@ -406,7 +415,7 @@
     {
       "tag": "🇺🇸 America",
       "type": "urltest",
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "http://cp.cloudflare.com/generate_204",
       "interval": "1m",
       "tolerance": 50,
       "outbounds": [
@@ -452,6 +461,25 @@
       "strategy": "prefer_ipv6"
     },
     "rules": [
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "inbound": [
+              "lan-mixed"
+            ]
+          },
+          {
+            "source_ip_cidr": [
+              "192.168.31.0/24"
+            ],
+            "invert": true
+          }
+        ],
+        "action": "reject",
+        "no_drop": true
+      },
       {
         "action": "sniff"
       },

@@ -3,7 +3,7 @@
 ;filter: 
 
 custom_proxy_group=🛩️ NodeSelected`select`[]🇭🇰 Hong Kong`[]🇹🇼 Taiwan`[]🇸🇬 Singapore`[]🇺🇸 America`[]⚡️ Auto`[]DIRECT
-custom_proxy_group=⚡️ Auto`url-test`.*`http://www.gstatic.com/generate_204`30,,50
+custom_proxy_group=⚡️ Auto`url-test`.*`http://cp.cloudflare.com/generate_204`30,,50
 custom_proxy_group=👀 ForeignMedia`select`[]🛩️ NodeSelected`[]🇭🇰 Hong Kong`[]🇹🇼 Taiwan`[]🇸🇬 Singapore`[]🇺🇸 America`[]🎯 Foreign`[]✈️ Others
 custom_proxy_group=Ⓜ️ Microsoft`select`DIRECT`[]🛩️ NodeSelected`[]🇭🇰 Hong Kong`[]🇹🇼 Taiwan`[]🇸🇬 Singapore`[]🇺🇸 America`[]🎯 Foreign`[]✈️ Others
 custom_proxy_group=🍏 Apple`select`DIRECT`[]🛩️ NodeSelected`[]🇭🇰 Hong Kong`[]🇹🇼 Taiwan`[]🇸🇬 Singapore`[]🇺🇸 America`[]🎯 Foreign`[]✈️ Others
@@ -12,11 +12,11 @@ custom_proxy_group=🎯 Foreign`select`[]🛩️ NodeSelected`[]DIRECT`[]⚡️ 
 custom_proxy_group=🇨🇳 China`select`[]DIRECT`.*
 custom_proxy_group=🌱 Purification`select`[]REJECT`[]DIRECT
 custom_proxy_group=🤖 AI`select`[]🇺🇸 America`[]🇭🇰 Hong Kong`[]🇹🇼 Taiwan`[]🇸🇬 Singapore`[]✈️ Others
-custom_proxy_group=🇭🇰 Hong Kong`url-test`.🇭🇰|HK|hk|香港|港|HongKong`http://www.gstatic.com/generate_204`500,,50
-custom_proxy_group=🇹🇼 Taiwan`url-test`.🇹🇼|TW|tw|台湾|臺灣|台|Taiwan`http://www.gstatic.com/generate_204`500,,50
-custom_proxy_group=🇸🇬 Singapore`url-test`.🇸🇬|SG|sg|新加坡|狮|Singapore`http://www.gstatic.com/generate_204`500,,50
-custom_proxy_group=🇺🇸 America`url-test`.🇺🇸|US|us|美国|美|United States`http://www.gstatic.com/generate_204`500,,50
-custom_proxy_group=✈️ Others`url-test`^(?!.*\b(🇭🇰|HK|hk|香港|港|HongKong|🇹🇼|TW|tw|台湾|臺灣|台|Taiwan|🇸🇬|SG|sg|新加坡|狮|Singapore|🇺🇸|US|us|美国|美|United States)\b).*`http://www.gstatic.com/generate_204`500,,50
+custom_proxy_group=🇭🇰 Hong Kong`url-test`.🇭🇰|HK|hk|香港|港|HongKong`http://cp.cloudflare.com/generate_204`500,,50
+custom_proxy_group=🇹🇼 Taiwan`url-test`.🇹🇼|TW|tw|台湾|臺灣|台|Taiwan`http://cp.cloudflare.com/generate_204`500,,50
+custom_proxy_group=🇸🇬 Singapore`url-test`.🇸🇬|SG|sg|新加坡|狮|Singapore`http://cp.cloudflare.com/generate_204`500,,50
+custom_proxy_group=🇺🇸 America`url-test`.🇺🇸|US|us|美国|美|United States`http://cp.cloudflare.com/generate_204`500,,50
+custom_proxy_group=✈️ Others`url-test`^(?!.*\b(🇭🇰|HK|hk|香港|港|HongKong|🇹🇼|TW|tw|台湾|臺灣|台|Taiwan|🇸🇬|SG|sg|新加坡|狮|Singapore|🇺🇸|US|us|美国|美|United States)\b).*`http://cp.cloudflare.com/generate_204`500,,50
 custom_proxy_group=😮‍💨 Final`select`[]🛩️ NodeSelected`[]🎯 Foreign`[]⚡️ Auto`.*
 
 ruleset=DIRECT,no-resolve,https://raw.githubusercontent.com/TensorNull/ProxyConfig/main/rule/no-resolve.list

@@ -18,6 +18,53 @@ The target families are:
   generic selector templates. The unsuffixed files are synchronized v6
   defaults.
 
+The three `country-auto` templates include native LAN sharing. They retain
+`127.0.0.1:2080` and add a separate HTTP/SOCKS mixed listener on
+`0.0.0.0:2080`, bound to the Wi-Fi interface `en0`. Both listeners use
+`reuse_addr: true` so they can share the port. LAN clients use the device's
+current Wi-Fi IP; the templates do not hard-code the Mac's address.
+A rule scoped to the LAN inbound rejects reported sources outside
+`192.168.31.0/24`; normal policy routing follows it. There is no separate
+LAN template family. This is an application proxy listener, not a NAT
+gateway for devices that have not configured an HTTP or SOCKS proxy.
+
+SFM 1.14.2's HTTP handler honors `X-Forwarded-For` when deriving the source
+address. A forged LAN address in that header bypassed the HTTP CIDR rule
+in a local test. That rule is not equivalent to socat's socket-level
+`range` filter and must not be treated as a firewall or authentication
+boundary. The LAN listener is bound to `en0`; the loopback listener remains
+separate.
+
+Native loopback and Wi-Fi HTTP/SOCKS5 access was verified locally with SFM
+1.14.2's NetworkExtension on 2026-10-17, with socat stopped. The old
+`local.sfm-lan-proxy` LaunchAgent is disabled and its plist is backed up
+outside `~/Library/LaunchAgents`. Access from another physical LAN device
+still needs confirmation. Updates to the existing `country-auto.json` URL
+carry the LAN listener once the reviewed templates are published; local
+template edits do not change a converter's remote copy. The current local
+profile and running SFM configuration include the native listeners without
+changing their existing node policies.
+
+For iCloud updates, inspect both
+`~/Library/Mobile Documents/iCloud~io~nekohasekai~sfamt/Documents` and the
+legacy `iCloud~io~nekohasekai~sfavt/Documents` directory. They are different
+application containers, not reliable macOS/iOS labels. Identify the profile
+file used on each device, back up each destination, preserve its own real
+nodes, IPv4/IPv6 track and TUN stack, then validate and read back each write.
+Shared files keep the loopback listener and use the interface-bound wildcard
+LAN listener, avoiding a bind to another device's fixed IP. iCloud file
+profiles do not refresh from repository templates automatically, and a local
+readback does not confirm delivery to the iPhone. The 10 existing JSON
+profiles in both containers are updated individually; their nodes and
+platform-specific DNS, routing, IPv4/IPv6 track and TUN stack are preserved.
+
+Before refreshing or activating an SFM profile, decode `selected_profile_id`
+with SFM's BinaryCodable format. In SFM 1.14.2, `00 06` is Optional<Int64>(3),
+not profile 6: the non-nil marker precedes a ZigZag varint. Resolve the actual
+profile name, type and source path before using a subscription URL. Recheck
+the selection before loading, then verify the running configuration against
+that selected source, including its real-node identities.
+
 All service-specific routing stays in remote rule-sets. The templates keep the
 remote `geosite-category-ads-all` set behind the `🌱 Purification` selector,
 which defaults to `direct` and also exposes `reject` and `🛩️ NodeSelected` for

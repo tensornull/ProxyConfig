@@ -89,6 +89,15 @@
         "server": "dns_resolver"
       },
       {
+        "domain": [
+          "aweme.snssdk.com",
+          "ecomuser.snssdk.com",
+          "frontier.snssdk.com"
+        ],
+        "action": "route",
+        "server": "dns_resolver"
+      },
+      {
         "rule_set": "geosite-cn",
         "server": "dns_resolver"
       },
@@ -635,6 +644,15 @@
         ],
         "outbound": "👀 ForeignMedia",
         "action": "route"
+      },
+      {
+        "domain": [
+          "aweme.snssdk.com",
+          "ecomuser.snssdk.com",
+          "frontier.snssdk.com"
+        ],
+        "action": "route",
+        "outbound": "🇨🇳 China"
       },
       {
         "rule_set": "geosite-cn",

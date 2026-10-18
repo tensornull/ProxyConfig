@@ -30,6 +30,32 @@ ADS_RULE_SET_URL = (
 AD_SELECTOR_TAG = "🌱 Purification"
 AD_REJECT_TAG = "reject"
 
+AI_SELECTOR_TAG = "🤖 AI"
+AI_RULE_SETS = (
+    "geosite-openai",
+    "geosite-anthropic",
+    "geosite-google-gemini",
+)
+AI_COUNTRY_TAGS = (
+    "🇯🇵 Japan",
+    "🇸🇬 Singapore",
+    "🇹🇼 Taiwan",
+    "🇺🇸 America",
+)
+SIMPLIFIED_REMOVED_OUTBOUNDS = ("🌐 Google", "Ⓜ️ Microsoft", "🍎 Apple")
+PROXY_SERVICE_RULE_SETS = ("geosite-google", "geoip-google", "geosite-microsoft")
+DIRECT_SERVICE_RULE_SETS = ("geosite-apple", "geosite-bilibili")
+GENERAL_PROXY_RULE_SETS = (
+    "geosite-github", "geosite-twitter", "geosite-facebook",
+    "geosite-telegram", "geoip-telegram", "geosite-instagram",
+    "geosite-amazon", "geosite-category-games", "geosite-binance",
+)
+POLICY_OUTBOUND_REPLACEMENTS = {
+    "🌐 Google": "🛩️ NodeSelected",
+    "Ⓜ️ Microsoft": "🛩️ NodeSelected",
+    "🍎 Apple": "direct",
+}
+
 # Keep the application-facing address synthetic while retaining the original
 # domain for route matching and proxy protocols.  The IPv6 range is the public
 # benchmark prefix used by Chromium without triggering private-network checks;
@@ -239,6 +265,8 @@ def ensure_fakeip(doc: dict[str, Any]) -> None:
             isinstance(rule, dict)
             and rule.get("server") == FAKEIP_SERVER_TAG
             and set(as_list(rule.get("query_type"))) == set(FAKEIP_QUERY_TYPES)
+            and set(rule) <= {"query_type", "server", "action"}
+            and rule.get("action", "route") == "route"
         )
     ]
     ad_index = next(
@@ -595,6 +623,203 @@ def ensure_ipv6_track(doc: dict[str, Any], variant: str) -> None:
         raise TemplateError("source template must exclude fc00::/7 from the TUN")
 
 
+def _replace_policy_outbound_refs(value: Any) -> None:
+    """Replace references to removed policy groups without touching node data."""
+
+    if isinstance(value, dict):
+        for key in ("outbound", "detour", "external_ui_download_detour"):
+            ref = value.get(key)
+            if isinstance(ref, str) and ref in POLICY_OUTBOUND_REPLACEMENTS:
+                value[key] = POLICY_OUTBOUND_REPLACEMENTS[ref]
+        if value.get("type") in {"selector", "urltest"}:
+            members = value.get("outbounds")
+            if (isinstance(members, list)
+                    and any(member in POLICY_OUTBOUND_REPLACEMENTS for member in members)):
+                value["outbounds"] = list(dict.fromkeys(
+                    POLICY_OUTBOUND_REPLACEMENTS.get(member, member)
+                    for member in members
+                ))
+            default = value.get("default")
+            if isinstance(default, str) and default in POLICY_OUTBOUND_REPLACEMENTS:
+                value["default"] = POLICY_OUTBOUND_REPLACEMENTS[default]
+        for child in value.values():
+            _replace_policy_outbound_refs(child)
+    elif isinstance(value, list):
+        for child in value:
+            _replace_policy_outbound_refs(child)
+
+
+def _unscoped_service_rule(rule: Any) -> bool:
+    return (
+        isinstance(rule, dict)
+        and bool(rule.get("rule_set"))
+        and "outbound" in rule
+        and rule.get("action", "route") == "route"
+        and set(rule) <= {"rule_set", "outbound", "action"}
+    )
+
+
+def _ordinary_service_index(rules: list[dict[str, Any]]) -> int:
+    special = {ADS_RULE_SET, "geosite-steam", "geosite-cn", "geoip-cn"}
+    for index, rule in enumerate(rules):
+        if _unscoped_service_rule(rule) and set(as_list(rule["rule_set"])) - special:
+            return index
+    return next(
+        (index for index, rule in enumerate(rules)
+         if rule.get("protocol") == "quic" and rule.get("action") == "reject"),
+        len(rules),
+    )
+
+
+def ensure_simplified_policy(doc: dict[str, Any]) -> None:
+    """Apply the shared service policy without normalizing platform settings.
+
+    This is also used on generated iCloud profiles, whose nodes, listeners,
+    resolver setup and local extensions must survive unchanged. Existing
+    legal selector defaults are retained; cached runtime choices are managed
+    by sing-box and are not reset here.
+    """
+
+    outbounds = doc.get("outbounds", [])
+    tags = {outbound.get("tag") for outbound in outbounds}
+    ai = next((outbound for outbound in outbounds
+               if outbound.get("tag") == AI_SELECTOR_TAG), None)
+    if ai is None or ai.get("type") != "selector":
+        raise TemplateError("simplified policy requires the AI selector")
+    if not set(AI_COUNTRY_TAGS).issubset(tags):
+        raise TemplateError("simplified policy requires all four AI country groups")
+
+    _replace_policy_outbound_refs(doc)
+    doc["outbounds"] = [outbound for outbound in outbounds
+                        if not (outbound.get("tag") in SIMPLIFIED_REMOVED_OUTBOUNDS
+                                and outbound.get("type") in {"selector", "urltest"})]
+    ai["outbounds"] = list(AI_COUNTRY_TAGS)
+    if ai.get("default") not in AI_COUNTRY_TAGS:
+        ai["default"] = "🇺🇸 America"
+
+    route = doc.setdefault("route", {})
+    if route.get("final") in POLICY_OUTBOUND_REPLACEMENTS:
+        route["final"] = POLICY_OUTBOUND_REPLACEMENTS[route["final"]]
+    rules = route.get("rules", [])
+    proxy_host = next(
+        (rule for rule in rules if _unscoped_service_rule(rule)
+         and rule.get("outbound") == "🛩️ NodeSelected"
+         and set(as_list(rule["rule_set"])) & set(GENERAL_PROXY_RULE_SETS)),
+        None,
+    )
+    if proxy_host is None:
+        proxy_host = next(
+            (rule for rule in rules if _unscoped_service_rule(rule)
+             and set(as_list(rule["rule_set"])) & set(PROXY_SERVICE_RULE_SETS)),
+            None,
+        )
+    direct_host = next(
+        (rule for rule in rules if _unscoped_service_rule(rule)
+         and set(as_list(rule["rule_set"])) & set(DIRECT_SERVICE_RULE_SETS)),
+        None,
+    )
+    if direct_host is proxy_host:
+        direct_host = None
+    managed_sets = set(AI_RULE_SETS + PROXY_SERVICE_RULE_SETS + DIRECT_SERVICE_RULE_SETS)
+    managed_sets.add("geosite-cn")
+    rewritten: list[dict[str, Any]] = []
+    for rule in rules:
+        scoped_ai = (
+            isinstance(rule, dict)
+            and rule.get("clash_mode") == "rule"
+            and rule.get("outbound") == AI_SELECTOR_TAG
+            and rule.get("action", "route") == "route"
+            and set(rule) <= {"rule_set", "clash_mode", "outbound", "action"}
+            and bool(rule.get("rule_set"))
+            and set(as_list(rule["rule_set"])).issubset(AI_RULE_SETS)
+        )
+        if not (_unscoped_service_rule(rule) or scoped_ai):
+            rewritten.append(rule)
+            continue
+        original_tags = as_list(rule["rule_set"])
+        if (not set(original_tags) & managed_sets
+                and rule is not proxy_host and rule is not direct_host):
+            rewritten.append(rule)
+            continue
+        remaining = [tag for tag in original_tags if tag not in managed_sets]
+        if rule is proxy_host:
+            remaining.extend(PROXY_SERVICE_RULE_SETS)
+        if rule is direct_host:
+            remaining.extend(DIRECT_SERVICE_RULE_SETS)
+        if not remaining:
+            continue
+        updated = copy.deepcopy(rule)
+        updated["rule_set"] = list(dict.fromkeys(remaining))
+        if rule is proxy_host:
+            updated.update(action="route", outbound="🛩️ NodeSelected")
+        if rule is direct_host:
+            updated.update(action="route", outbound="direct")
+        rewritten.append(updated)
+
+    if proxy_host is None:
+        rewritten.insert(_ordinary_service_index(rewritten), {
+            "rule_set": list(PROXY_SERVICE_RULE_SETS),
+            "action": "route", "outbound": "🛩️ NodeSelected",
+        })
+    if direct_host is None:
+        index = next(index + 1 for index, rule in enumerate(rewritten)
+                     if set(as_list(rule.get("rule_set"))) & set(PROXY_SERVICE_RULE_SETS))
+        rewritten.insert(index, {
+            "rule_set": list(DIRECT_SERVICE_RULE_SETS),
+            "action": "route", "outbound": "direct",
+        })
+
+    # Preserve explicit infrastructure exceptions ahead of the newly early
+    # domestic classifier. Keep geoip-cn and the generic private-IP fallback
+    # in their existing tail positions, without resolving public domains.
+    service_index = _ordinary_service_index(rewritten)
+    infrastructure = [
+        rule for rule in rewritten[service_index:]
+        if rule.get("action", "route") == "route"
+        and "rule_set" not in rule and "clash_mode" not in rule
+        and (contains_allowed_domain(rule)
+             or (rule.get("outbound") == "direct" and "ip_cidr" in rule))
+    ]
+    rewritten = [rule for rule in rewritten
+                 if not any(rule is exception for exception in infrastructure)]
+    service_index = _ordinary_service_index(rewritten)
+    rewritten[service_index:service_index] = [*infrastructure, {
+        "rule_set": "geosite-cn", "action": "route", "outbound": "🇨🇳 China",
+    }]
+
+    ad_index = next((index for index, rule in enumerate(rewritten)
+                     if ADS_RULE_SET in as_list(rule.get("rule_set"))), None)
+    if ad_index is None:
+        ad_index = max((index + 1 for index, rule in enumerate(rewritten)
+                        if rule.get("action") in {"sniff", "hijack-dns"}), default=0)
+    rewritten.insert(ad_index, {
+        "rule_set": list(AI_RULE_SETS), "clash_mode": "rule",
+        "action": "route", "outbound": AI_SELECTOR_TAG,
+    })
+    route["rules"] = rewritten
+
+    dns = doc.setdefault("dns", {})
+    dns_rules = [
+        rule for rule in dns.get("rules", [])
+        if not (
+            rule.get("clash_mode") == "rule"
+            and rule.get("server") == FAKEIP_SERVER_TAG
+            and set(as_list(rule.get("query_type"))) == set(FAKEIP_QUERY_TYPES)
+            and bool(rule.get("rule_set"))
+            and set(as_list(rule["rule_set"])).issubset(AI_RULE_SETS)
+            and set(rule) <= {"rule_set", "clash_mode", "query_type", "server", "action"}
+            and rule.get("action", "route") == "route"
+        )
+    ]
+    ad_index = next((index for index, rule in enumerate(dns_rules)
+                     if ADS_RULE_SET in as_list(rule.get("rule_set"))), 0)
+    dns_rules.insert(ad_index, {
+        "rule_set": list(AI_RULE_SETS), "clash_mode": "rule",
+        "query_type": list(FAKEIP_QUERY_TYPES), "server": FAKEIP_SERVER_TAG,
+    })
+    dns["rules"] = dns_rules
+
+
 def transform_document(source: dict[str, Any], variant: str, *,
                        tailscale_coexist: bool = False) -> dict[str, Any]:
     doc = copy.deepcopy(source)
@@ -618,6 +843,7 @@ def transform_document(source: dict[str, Any], variant: str, *,
     # templates with a pre-existing direct/global rule are unambiguous.
     route["rules"] = normalize_route_actions(route.get("rules", []))
     ensure_ipv6_track(doc, variant)
+    ensure_simplified_policy(doc)
     return doc
 
 

@@ -65,13 +65,27 @@ profile name, type and source path before using a subscription URL. Recheck
 the selection before loading, then verify the running configuration against
 that selected source, including its real-node identities.
 
-All service-specific routing stays in remote rule-sets. The templates keep the
-remote `geosite-category-ads-all` set behind the `🌱 Purification` selector,
-which defaults to `direct` and also exposes `reject` and `🛩️ NodeSelected` for
-testing. The templates contain no
-hand-written ad hosts, process rules, or WeChat/QQ/Taobao app lists. Domestic
-traffic continues to use `geosite-cn`/`geoip-cn`, while
-`geosite-geolocation-!cn` and the service rule-sets handle foreign traffic.
+All service-specific routing stays in remote rule-sets. Google and Microsoft
+share `🛩️ NodeSelected`; Apple and Bilibili share a direct route. Their remote
+sets remain present, while the Google, Microsoft and Apple selectors are
+removed. `geosite-cn` precedes ordinary service rules; `geoip-cn` remains the
+late fallback for available IP addresses. AI, Steam, mode and infrastructure
+exceptions keep their intended priority, and Google's existing priority over
+YouTube remains intact. No unconditional route `resolve` is added.
+
+OpenAI, Claude and Gemini share `🤖 AI`. In rule mode, AI routes precede ads;
+AI A/AAAA DNS rules also precede ads and domestic DNS and retain FakeIP. Other
+DNS record types retain their existing behavior. Direct/global mode does not
+use this AI exception. AI has only Japan, Singapore, Taiwan and America, with
+America as the public-template default. Local profiles preserve a valid current
+country and selected real node, including the current Singapore selection.
+Shared country URL tests keep their existing parameters and can still switch
+nodes within a country.
+
+The remote `geosite-category-ads-all` set stays behind `🌱 Purification`,
+which defaults to `direct` and exposes `reject` and `🛩️ NodeSelected` for
+testing. The templates contain no hand-written ad hosts, process rules, or
+WeChat/QQ/Taobao app lists. `🇨🇳 China` stays selectable and defaults to direct.
 
 The IPv6-preferred tracks preserve domains across the TUN-to-proxy boundary
 with a sing-box FakeIP server for A/AAAA queries. The synthetic IPv6 range is
@@ -192,7 +206,18 @@ checks, because its routing context differs from a standalone process.
 The sing-box built-in [Tailscale endpoint](https://sing-box.sagernet.org/configuration/endpoint/tailscale/)
 creates its own Tailscale node. Its [Tailscale DNS server](https://sing-box.sagernet.org/configuration/dns/server/tailscale/)
 references that endpoint; it does not adopt the existing macOS client identity.
-The external-client coexistence configuration uses a UDP DNS server instead.
+Its state directory holds that separate identity, and a fresh state requires
+its own authentication. The external-client coexistence configuration uses a
+UDP DNS server instead. This iteration keeps the external client; it does not
+register or migrate to an embedded node.
+
+The official [tsnet documentation](https://tailscale.com/docs/features/tsnet)
+explains application-owned tailnet identities. Tailscale's official
+[connection types](https://tailscale.com/docs/reference/connection-types)
+describe direct UDP, peer relay and DERP paths. These capability documents do
+not establish which client has a higher P2P success rate on this network.
+No controlled comparison or verified community comparison is recorded here;
+community anecdotes must be labeled with their version and network context.
 See [Tailscale DNS](https://tailscale.com/docs/reference/dns-in-tailscale) and
 [MagicDNS](https://tailscale.com/docs/features/magicdns), sing-box's
 [DNS evaluate/respond actions](https://sing-box.sagernet.org/configuration/dns/rule_action/)
@@ -201,45 +226,116 @@ and Apple's [excluded routes](https://developer.apple.com/documentation/networke
 
 ## Build and test
 
-Generate a pilot pair from the automatic template:
+From the repository root, choose a private run directory and a CLI whose
+`version` output matches SFM's core:
+
+```sh
+umask 077
+SINGBOX_RUN_DIR="sing-box/.tmp/template-tests/$(date +%Y%m%d-%H%M%S)"
+SINGBOX_CLI="/path/to/matching/sing-box"
+"$SINGBOX_CLI" version
+```
+
+Generate a pilot pair in the draft directory:
 
 ```sh
 python3 scripts/build_singbox_templates.py \
   --template sing-box/country-auto.json \
-  --output-dir sing-box
+  --output-dir "$SINGBOX_RUN_DIR/generated"
 ```
 
 The builder can reproduce both tracks for all four platforms in a temporary
 directory:
 
 ```sh
-python3 scripts/build_singbox_templates.py --all --output-dir sing-box/.tmp/template-tests/<run>/generated
+python3 scripts/build_singbox_templates.py --all --output-dir "$SINGBOX_RUN_DIR/generated"
+for family in country-auto country-select country-select-macos country-select-ios; do
+  cp "$SINGBOX_RUN_DIR/generated/$family-v6.json" "$SINGBOX_RUN_DIR/generated/$family.json"
+done
 ```
 
 The checked-in v6 files are the compatibility defaults. The builder never
-overwrites unsuffixed files; promoting an explicit fallback remains an
-explicit copy step after review.
+overwrites unsuffixed files; the copy step above creates their draft versions.
+Validate all 12 drafts before copying them to the shipped directory. Promoting
+a v4 fallback requires an explicit choice. Regenerate into a second draft
+directory and compare the outputs to confirm that normalization is idempotent.
 
-Run static checks and the remote rule-set probes. Each run writes only
-non-secret diagnostics under `sing-box/.tmp/template-tests/<run>/`:
+Run static checks and remote rule-set probes against the draft directory.
+Use a CLI matching the installed SFM core (1.14.3 for this iteration), and keep
+diagnostics under `sing-box/.tmp/template-tests/<run>/`:
 
 ```sh
-python3 scripts/test_singbox_templates.py --templates-dir sing-box
+python3 scripts/test_singbox_templates.py \
+  --templates-dir "$SINGBOX_RUN_DIR/generated" \
+  --run-dir "$SINGBOX_RUN_DIR/checks" \
+  --sing-box "$SINGBOX_CLI"
 ```
 
 On macOS, add `--macos-environment --dns-probes` to record the active TUN,
 default IPv6 route, Wi-Fi state, resolver families, and possible Tailscale DNS
-interception. Add `--network-probes` when evaluating an explicit fallback track.
+interception. `--dns-probes` and `--network-probes` observe the active system
+network; they do not route through or prove the behavior of an unactivated
+draft. Candidate traffic needs a separately running isolated instance.
 
 The release gate still requires the real SFM final subscription URL (including
 its redirect) and checks for real proxy nodes, populated country groups,
-missing references, and `sing-box check` success:
+missing references, and `sing-box check` success. Supply the real final URL as
+`SINGBOX_SUBSCRIPTION_URL` through the existing private credential interface:
 
 ```sh
-SINGBOX_SUBSCRIPTION_URL='…' \
-  python3 scripts/validate_singbox_subscription.py \
-  --template sing-box/country-auto.json
+python3 scripts/validate_singbox_subscription.py \
+  --template "$SINGBOX_RUN_DIR/generated" \
+  --sing-box "$SINGBOX_CLI"
 ```
+
+If that URL still reads the old published GitHub template, a pass establishes
+only the subscription chain and real-node baseline. Expand the draft with the
+matching real nodes and validate that candidate separately. Do not describe
+the new local policy as remotely deployed until a later authorized publication
+and a fresh final-URL check confirm it.
+
+## Configuration update SOP
+
+1. Identify the actual selected SFM profile and source. Inventory all 12
+   templates and JSON profiles in both iCloud containers. Back up each file,
+   record its SHA-256, real-node identities and valid selections, and preserve
+   its IPv4/IPv6 track, TUN stack and platform differences. Keep private backups
+   and expanded drafts in an ignored run directory with files mode `0600`.
+2. Build drafts, review the policy diff and repeat generation. Check for stale
+   selector references, populated countries, AI paths limited to its four
+   countries, unchanged URL-test parameters, and v6/default equality. Retain
+   personal infrastructure rules, LAN sharing, FakeIP, QUIC and Tailscale rules.
+3. Run structural checks, warning-free matching-version `sing-box check`, real
+   remote-set matches and the real final-URL check above. Exercise rule/direct/
+   global modes, AI/ad and China/service intersections, Steam, media and fallback
+   routing. Match probes using mode, protocol and IP conditions explicitly.
+4. Expand candidates with real nodes and run an isolated CLI instance. Remove
+   its TUN and LAN listeners; bind only fresh loopback proxy/DNS/API ports,
+   outside active 2080/9090, and use a separate cache. Probe candidate DNS and
+   HTTP/SOCKS paths, record matched routes, and distinguish authentication or
+   region restrictions from connection failures. Regress v4/v6, FakeIP, QUIC,
+   ads, LAN structure, infrastructure and Tailscale; label OS/TUN, physical LAN
+   and iPhone checks that an isolated CLI cannot prove. Stop only that instance.
+5. After candidate checks pass, recheck every destination's original hash.
+   Stop on concurrent edits or an uncertain write. Copy the reviewed templates
+   and per-profile drafts to their destinations, preserving each profile's real
+   nodes and valid selections; read back, hash and validate every destination.
+   On a caused failure, restore only this run's affected files from backups and
+   verify restoration. Do not restart, activate, change modes or refresh SFM
+   during a file-only update.
+6. Report file updates, remote publication and runtime activation separately.
+   Read current runtime state without changing it to confirm the active tunnel
+   stayed intact. File readback does not establish iCloud delivery or iPhone
+   behavior. A later authorized activation needs its own SFM NetworkExtension
+   DNS/route/connection checks and rollback using the recorded source/selection.
+
+The current operation stops after validated file staging: SFM activation,
+remote publication and iPhone live validation are separate steps. The Clash API
+on 9090 is usable for observation, but sing-box 1.14.3's
+[`PUT /configs` handler](https://github.com/SagerNet/sing-box/blob/v1.14.3/experimental/clashapi/configs.go#L64)
+only returns 204 and does not reload files. Do not treat that response as proof
+of activation. Consult the run report for checks actually completed and their
+limits; this SOP itself is not a test result.
 
 Do not put subscription URLs, passwords, or complete node bodies in logs.
 

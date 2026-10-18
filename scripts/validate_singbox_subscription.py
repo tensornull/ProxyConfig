@@ -14,6 +14,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from . import build_singbox_templates as template_builder
+else:
+    import build_singbox_templates as template_builder
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VALIDATE_DIR = REPO_ROOT / "sing-box" / ".tmp" / "validate"
@@ -45,6 +50,15 @@ REQUIRED_POLICY_RULE_SETS = {
     "geosite-geolocation-!cn",
     ADS_RULE_SET,
 }
+REQUIRED_SERVICE_RULESETS = (
+    "geosite-openai", "geosite-anthropic", "geosite-github", "geosite-twitter",
+    "geosite-facebook", "geosite-telegram", "geoip-telegram", "geosite-instagram",
+    "geosite-amazon", "geosite-category-games", "geosite-binance", "geosite-google",
+    "geoip-google", "geosite-google-gemini", "geosite-apple", "geosite-microsoft",
+    "geosite-youtube", "geosite-tiktok", "geosite-netflix", "geosite-bilibili",
+    "geosite-cn", "geoip-cn", "geosite-geolocation-!cn", "geosite-feishu",
+    "geosite-steam", ADS_RULE_SET,
+)
 HAND_WRITTEN_APP_TERMS = re.compile(
     r"(?:^|[.\\/_-])(?:qq|tencent|wechat|weixin|taobao|tmall|alicdn|mmstat)(?:$|[.\\/_-])",
     re.IGNORECASE,
@@ -210,6 +224,197 @@ def has_ipv6_private_exclusion(doc: dict[str, Any]) -> bool:
     )
 
 
+def check_simplified_policy(
+    label: str,
+    doc: dict[str, Any],
+    *,
+    allow_placeholders: bool = False,
+    require_real_nodes: bool = True,
+) -> list[str]:
+    """Check the new local policy independently of an older remote final.
+
+    Expanded candidates must have real, recursively reachable AI nodes. Source
+    templates can opt into placeholders; this does not verify their expansion.
+    """
+    failures: list[str] = []
+    ai_tag = template_builder.AI_SELECTOR_TAG
+    ai_countries = set(template_builder.AI_COUNTRY_TAGS)
+    ai_sets = set(template_builder.AI_RULE_SETS)
+    removed = set(template_builder.SIMPLIFIED_REMOVED_OUTBOUNDS)
+    proxy_sets = set(template_builder.PROXY_SERVICE_RULE_SETS)
+    direct_sets = set(template_builder.DIRECT_SERVICE_RULE_SETS)
+    outbounds = {
+        item.get("tag"): item for item in doc.get("outbounds", [])
+        if isinstance(item, dict) and isinstance(item.get("tag"), str)
+    }
+    for obj in walk_objects(doc):
+        for key in ("tag", "outbound", "outbounds", "default", "detour", "final",
+                    "external_ui_download_detour"):
+            if removed.intersection(value for value in as_list(obj.get(key))
+                                    if isinstance(value, str)):
+                failures.append(f"{label}: removed service selector/reference remains")
+                break
+    ai = outbounds.get(ai_tag, {})
+    members = ai.get("outbounds", [])
+    if (ai.get("type") != "selector" or not isinstance(members, list)
+            or not all(isinstance(member, str) for member in members)
+            or len(members) != len(ai_countries) or set(members) != ai_countries):
+        failures.append(f"{label}: AI candidates must be exactly JP/SG/TW/US countries")
+    if ai.get("default") not in ai_countries:
+        failures.append(f"{label}: AI default must be an allowed country")
+
+    def reachable(tag: str, trail: frozenset[str] = frozenset()) -> tuple[set[str], set[str]]:
+        if tag == "🇭🇰 Hong Kong" and ai_tag in trail:
+            return set(), {"Hong Kong group reachable"}
+        if is_placeholder(tag):
+            return set(), set() if allow_placeholders else {"unexpanded placeholder"}
+        if tag in trail:
+            return set(), {"selector cycle"}
+        outbound = outbounds.get(tag)
+        if outbound is None:
+            return set(), {"missing outbound"}
+        if outbound.get("type") not in {"selector", "urltest"}:
+            if not outbound.get("type") or outbound.get("type") in CONTROL_OUTBOUND_TYPES:
+                return set(), {"non-proxy leaf"}
+            return {tag}, set()
+        leaves: set[str] = set()
+        problems: set[str] = set()
+        children = outbound.get("outbounds", [])
+        if not isinstance(children, list) or not children:
+            return leaves, {"empty selector"}
+        for child in children:
+            if not isinstance(child, str):
+                problems.add("invalid member")
+                continue
+            child_leaves, child_problems = reachable(child, trail | {tag})
+            leaves.update(child_leaves)
+            problems.update(child_problems)
+        return leaves, problems
+
+    ai_leaves, ai_problems = reachable(ai_tag)
+    hk_leaves, _ = reachable("🇭🇰 Hong Kong")
+    if ai_leaves & hk_leaves:
+        ai_problems.add("Hong Kong node reachable")
+    if ai_problems:
+        failures.append(f"{label}: AI reachability failed: {', '.join(sorted(ai_problems))}")
+    for country in sorted(ai_countries):
+        leaves, problems = reachable(country)
+        if problems or (require_real_nodes and not leaves):
+            failures.append(f"{label}: AI country {country} lacks safe reachable proxy nodes")
+    if require_real_nodes and not ai_leaves:
+        failures.append(f"{label}: AI has no reachable real proxy nodes")
+
+    route = doc.get("route") or {}
+    rules = route.get("rules") or []
+    dns_rules = (doc.get("dns") or {}).get("rules") or []
+    definitions = {item.get("tag"): item for item in route.get("rule_set", [])
+                   if isinstance(item, dict)}
+    if any(definitions.get(tag, {}).get("type") != "remote"
+           for tag in REQUIRED_SERVICE_RULESETS):
+        failures.append(f"{label}: simplified policy must retain all remote service rule-sets")
+
+    def exact_rule_indices(scope: list[Any], sets: set[str], target_key: str,
+                           target: str, *, ai_rule: bool = False,
+                           allow_other_sets: bool = False) -> list[int]:
+        allowed = {"rule_set", "action", target_key}
+        if ai_rule:
+            allowed.add("clash_mode")
+            if target_key == "server":
+                allowed.add("query_type")
+        result = []
+        for index, rule in enumerate(scope):
+            if not isinstance(rule, dict):
+                continue
+            actual_sets = set(as_list(rule.get("rule_set")))
+            if not (sets <= actual_sets if allow_other_sets else actual_sets == sets):
+                continue
+            if (set(rule) - allowed or rule.get(target_key) != target
+                    or rule.get("action", "route") != "route"):
+                continue
+            if target_key == "outbound" and rule.get("action") != "route":
+                continue
+            if ai_rule and rule.get("clash_mode") != "rule":
+                continue
+            if ai_rule and target_key == "server" and set(as_list(rule.get("query_type"))) != {"A", "AAAA"}:
+                continue
+            result.append(index)
+        return result
+
+    lan_tags = {inbound.get("tag") for inbound in doc.get("inbounds", [])
+                if isinstance(inbound, dict) and inbound.get("type") == "mixed"
+                and inbound.get("listen") not in {None, "127.0.0.1", "::1"}}
+
+    def safe_route_prefix(rule: dict[str, Any]) -> bool:
+        if rule.get("action") == "sniff" and set(rule) <= {"action", "sniffer", "timeout"}:
+            return True
+        if rule == {"protocol": "dns", "action": "hijack-dns"}:
+            return True
+        if rule == {"ip_version": 6, "network": "tcp", "action": "reject", "no_drop": True}:
+            return True
+        if (set(rule) != {"type", "mode", "rules", "action", "no_drop"}
+                or rule.get("type") != "logical" or rule.get("mode") != "and"
+                or rule.get("action") != "reject" or rule.get("no_drop") is not True):
+            return False
+        children = rule.get("rules")
+        if not isinstance(children, list) or len(children) != 2 or not all(isinstance(child, dict) for child in children):
+            return False
+        inbound_rule = next((child for child in children if set(child) == {"inbound"}), {})
+        source_rule = next((child for child in children if set(child) == {"source_ip_cidr", "invert"}), {})
+        return (bool(as_list(inbound_rule.get("inbound")))
+                and set(as_list(inbound_rule.get("inbound"))) <= lan_tags
+                and bool(as_list(source_rule.get("source_ip_cidr")))
+                and source_rule.get("invert") is True)
+
+    for scope_name, scope, target_key, target in (
+        ("route", rules, "outbound", ai_tag),
+        ("dns", dns_rules, "server", "fakeip"),
+    ):
+        indices = exact_rule_indices(scope, ai_sets, target_key, target, ai_rule=True)
+        matching = [index for index, rule in enumerate(scope) if isinstance(rule, dict)
+                    and ai_sets.intersection(as_list(rule.get("rule_set")))]
+        if len(indices) != 1 or matching != indices:
+            failures.append(f"{label}: {scope_name} needs one complete rule-mode AI rule")
+        else:
+            if any(not isinstance(rule, dict) or scope_name != "route" or not safe_route_prefix(rule)
+                   for rule in scope[:indices[0]]):
+                failures.append(f"{label}: {scope_name} AI rule has an unsafe earlier terminal rule")
+            ads = first_rule_index(scope, lambda rule: ADS_RULE_SET in as_list(rule.get("rule_set")))
+            if ads is None or indices[0] >= ads:
+                failures.append(f"{label}: {scope_name} AI rule must precede ads")
+
+    for service_sets, target in ((proxy_sets, "🛩️ NodeSelected"), (direct_sets, "direct")):
+        indices = exact_rule_indices(rules, service_sets, "outbound", target,
+                                     allow_other_sets=target == "🛩️ NodeSelected")
+        matching = [index for index, rule in enumerate(rules) if isinstance(rule, dict)
+                    and service_sets.intersection(as_list(rule.get("rule_set")))]
+        if len(indices) != 1 or matching != indices:
+            failures.append(f"{label}: service rules must be merged into their simplified target")
+    cn = exact_rule_indices(rules, {"geosite-cn"}, "outbound", "🇨🇳 China")
+    ordinary_services = set(REQUIRED_SERVICE_RULESETS) - ai_sets - {
+        ADS_RULE_SET, "geosite-steam", "geosite-cn", "geoip-cn",
+        "geosite-geolocation-!cn", "geosite-feishu",
+    }
+    services = [index for index, rule in enumerate(rules) if isinstance(rule, dict)
+                and ordinary_services.intersection(as_list(rule.get("rule_set")))]
+    if len(cn) != 1 or any(index <= cn[0] for index in services):
+        failures.append(f"{label}: general geosite-cn route must precede ordinary services")
+    preserved_exceptions = [index for index, rule in enumerate(rules) if isinstance(rule, dict)
+                            and (rule.get("clash_mode") in {"direct", "global"}
+                                 or "geosite-steam" in as_list(rule.get("rule_set"))
+                                 or (not rule.get("rule_set") and rule.get("action") == "route"
+                                     and (template_builder.contains_allowed_domain(rule)
+                                          or (rule.get("outbound") == "direct" and "ip_cidr" in rule))))]
+    if len(cn) == 1 and any(index >= cn[0] for index in preserved_exceptions):
+        failures.append(f"{label}: general geosite-cn route must follow mode/Steam/infrastructure exceptions")
+    foreign = first_rule_index(rules, lambda rule: "geosite-geolocation-!cn" in as_list(rule.get("rule_set")))
+    geoip = [index for index, rule in enumerate(rules) if isinstance(rule, dict)
+             and "geoip-cn" in as_list(rule.get("rule_set"))
+             and set(as_list(rule.get("protocol"))) != {"quic"}]
+    if foreign is None or not geoip or any(index <= foreign for index in geoip):
+        failures.append(f"{label}: non-QUIC geoip-cn route must follow foreign geolocation routing")
+    return failures
+
+
 def check_document(
     label: str,
     doc: dict[str, Any],
@@ -217,6 +422,7 @@ def check_document(
     allow_placeholders: bool,
     require_real_nodes: bool,
     expected_variant: str | None = None,
+    require_simplified_policy: bool = False,
 ) -> tuple[list[str], dict[str, Any]]:
     failures: list[str] = []
     outbounds = doc.get("outbounds") or []
@@ -627,6 +833,12 @@ def check_document(
                 + ", ".join(fallback_only_groups)
             )
 
+    if require_simplified_policy:
+        failures.extend(check_simplified_policy(
+            label, doc, allow_placeholders=allow_placeholders,
+            require_real_nodes=require_real_nodes,
+        ))
+
     stats = {
         "outbound_count": len(outbounds),
         "real_proxy_node_count": len(real_proxy_nodes),
@@ -638,6 +850,7 @@ def check_document(
         "ads_rule_set": ADS_RULE_SET in rule_set_tags,
         "selectable_ads": selectable_ads,
         "pre_sniff_ipv6_tcp_reject": has_pre_sniff_ipv6_tcp_reject(route_rules),
+        "simplified_policy_checked": require_simplified_policy,
     }
     return failures, stats
 
@@ -796,6 +1009,12 @@ def parse_args() -> argparse.Namespace:
         help="Only validate local templates. Do not use this before publishing sing-box changes.",
     )
     parser.add_argument(
+        "--require-simplified-policy",
+        action="store_true",
+        help=("Require the simplified AI/service policy in local templates only. "
+              "Remote final output remains a baseline check until publication."),
+    )
+    parser.add_argument(
         "--template",
         dest="templates",
         action="append",
@@ -837,6 +1056,7 @@ def main() -> int:
             allow_placeholders=True,
             require_real_nodes=False,
             expected_variant=expected_variant,
+            require_simplified_policy=args.require_simplified_policy,
         )
         failures.extend(doc_failures)
         failures.extend(
@@ -856,6 +1076,8 @@ def main() -> int:
         )
 
     print("local_templates_json_ok=true")
+    if args.require_simplified_policy:
+        print("local_simplified_policy_check=enabled final_simplified_policy_check=baseline_only")
     for line in template_stats:
         print(line)
 

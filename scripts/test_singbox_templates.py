@@ -10,6 +10,7 @@ sing-box check inputs, and a compact JSON report are written below
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -22,23 +23,28 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
-from build_singbox_templates import (
-    ADS_RULE_SET,
-    ADS_RULE_SET_URL,
-    ALLOWED_DOMAIN_VALUES,
-    APP_DOMAIN_MARKERS,
-    DOMAIN_KEYS,
-    FAKEIP_INET4_RANGE,
-    FAKEIP_INET6_RANGE,
-    FAKEIP_QUERY_TYPES,
-    FAKEIP_SERVER_TAG,
-    PROCESS_KEYS,
-    as_list,
-    is_handwritten_app_or_ad_rule,
-    load_json,
-)
+if __package__:
+    from . import build_singbox_templates as template_builder
+    from .validate_singbox_subscription import REQUIRED_SERVICE_RULESETS, check_simplified_policy
+else:
+    import build_singbox_templates as template_builder
+    from validate_singbox_subscription import REQUIRED_SERVICE_RULESETS, check_simplified_policy
+
+ADS_RULE_SET = template_builder.ADS_RULE_SET
+ADS_RULE_SET_URL = template_builder.ADS_RULE_SET_URL
+ALLOWED_DOMAIN_VALUES = template_builder.ALLOWED_DOMAIN_VALUES
+APP_DOMAIN_MARKERS = template_builder.APP_DOMAIN_MARKERS
+DOMAIN_KEYS = template_builder.DOMAIN_KEYS
+FAKEIP_INET4_RANGE = template_builder.FAKEIP_INET4_RANGE
+FAKEIP_INET6_RANGE = template_builder.FAKEIP_INET6_RANGE
+FAKEIP_QUERY_TYPES = template_builder.FAKEIP_QUERY_TYPES
+FAKEIP_SERVER_TAG = template_builder.FAKEIP_SERVER_TAG
+PROCESS_KEYS = template_builder.PROCESS_KEYS
+as_list = template_builder.as_list
+is_handwritten_app_or_ad_rule = template_builder.is_handwritten_app_or_ad_rule
+load_json = template_builder.load_json
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -58,33 +64,6 @@ CANONICAL_TEMPLATES = {
     "country-select-macos.json",
     "country-select-ios.json",
 }
-REQUIRED_SERVICE_RULESETS = (
-    "geosite-openai",
-    "geosite-anthropic",
-    "geosite-github",
-    "geosite-twitter",
-    "geosite-facebook",
-    "geosite-telegram",
-    "geoip-telegram",
-    "geosite-instagram",
-    "geosite-amazon",
-    "geosite-category-games",
-    "geosite-binance",
-    "geosite-google",
-    "geoip-google",
-    "geosite-google-gemini",
-    "geosite-apple",
-    "geosite-microsoft",
-    "geosite-youtube",
-    "geosite-tiktok",
-    "geosite-netflix",
-    "geosite-bilibili",
-    "geosite-cn",
-    "geoip-cn",
-    "geosite-geolocation-!cn",
-    "geosite-feishu",
-    "geosite-steam",
-)
 RULESET_PROBES = (
     ("geosite-cn", "login.weixin.qq.com", True),
     ("geosite-cn", "taobao.com", True),
@@ -94,13 +73,37 @@ RULESET_PROBES = (
     (ADS_RULE_SET, "taobao.com", False),
     ("geosite-steam", "store.steampowered.com", True),
     ("geosite-openai", "api.openai.com", True),
+    ("geosite-openai", "browser-intake-datadoghq.com", True),
+    (ADS_RULE_SET, "browser-intake-datadoghq.com", True),
+    ("geosite-anthropic", "api.anthropic.com", True),
+    ("geosite-google-gemini", "gemini.google.com", True),
+    ("geosite-google-gemini", "generativelanguage.googleapis.com", True),
     ("geosite-google", "www.google.com", True),
+    ("geosite-cn", "google.cn", True),
+    ("geosite-google", "google.cn", True),
+    ("geosite-cn", "cn.bing.com", True),
+    ("geosite-microsoft", "cn.bing.com", True),
+    ("geosite-cn", "www.apple.com.cn", True),
+    ("geosite-apple", "www.apple.com.cn", True),
+    ("geosite-cn", "www.bilibili.com", True),
+    ("geosite-bilibili", "www.bilibili.com", True),
+    ("geoip-cn", "223.5.5.5", True),
 )
 ROUTE_PROBES = (
     ("login.weixin.qq.com", "🇨🇳 China"),
     ("taobao.com", "🇨🇳 China"),
-    ("google.com", "🌐 Google"),
+    ("google.com", "🛩️ NodeSelected"),
     ("api.openai.com", "🤖 AI"),
+    ("api.anthropic.com", "🤖 AI"),
+    ("browser-intake-datadoghq.com", "🤖 AI"),
+    ("gemini.google.com", "🤖 AI"),
+    ("generativelanguage.googleapis.com", "🤖 AI"),
+    ("google.cn", "🇨🇳 China"),
+    ("cn.bing.com", "🇨🇳 China"),
+    ("www.apple.com.cn", "🇨🇳 China"),
+    ("www.bilibili.com", "🇨🇳 China"),
+    ("www.microsoft.com", "🛩️ NodeSelected"),
+    ("www.apple.com", "direct"),
     ("github.com", "🛩️ NodeSelected"),
     ("github.githubassets.com", "🛩️ NodeSelected"),
     ("store.steampowered.com", "🎮 Other"),
@@ -497,6 +500,8 @@ def check_fakeip(label: str, doc: dict[str, Any], result: CheckResult) -> None:
             if isinstance(rule, dict)
             and rule.get("server") == FAKEIP_SERVER_TAG
             and set(as_list(rule.get("query_type"))) == set(FAKEIP_QUERY_TYPES)
+            and set(rule) <= {"query_type", "server", "action"}
+            and rule.get("action", "route") == "route"
         ),
         None,
     )
@@ -576,6 +581,9 @@ def check_document(label: str, doc: dict[str, Any]) -> CheckResult:
     check_handwritten_rules(label, doc, result)
     check_ipv6_track(label, doc, result)
     check_fakeip(label, doc, result)
+    result.failures.extend(check_simplified_policy(
+        label, doc, allow_placeholders=True, require_real_nodes=False,
+    ))
 
     outbounds = doc.get("outbounds") or []
     tags_out = {
@@ -729,43 +737,234 @@ def run_rule_set_probes(
 
 
 def route_rule_set_match(
-    sing_box: Path, rule_paths: dict[str, Path], tag: str, domain: str
+    sing_box: Path, rule_paths: dict[str, Path], tag: str, domain: str,
+    *, destination_ip: str | None = None,
 ) -> bool:
     path = rule_paths.get(tag)
-    return path is not None and rule_set_match(sing_box, path, domain)
+    if path is None:
+        raise ProbeUnsupported("rule-set is unavailable")
+    if tag.startswith("geoip-"):
+        return bool(destination_ip) and rule_set_match(sing_box, path, destination_ip)
+    if tag.startswith("geosite-"):
+        return bool(domain) and rule_set_match(sing_box, path, domain)
+    raise ProbeUnsupported("rule-set address scope is unknown")
+
+
+class ProbeUnsupported(ValueError):
+    """A static probe cannot decide a rule from the supplied packet metadata."""
+
+
+def _route_rule_match(
+    rule: dict[str, Any], context: dict[str, Any],
+    match_rule_set: Callable[[str, dict[str, Any]], bool],
+) -> tuple[bool | None, set[str]]:
+    """Return unknown instead of silently matching unsupported conditions."""
+    unsupported: set[str] = set()
+    if rule.get("type") == "logical":
+        children = rule.get("rules")
+        mode = rule.get("mode")
+        if not isinstance(children, list) or not children or mode not in {"and", "or"}:
+            return None, {"invalid logical rule"}
+        matches = [_route_rule_match(child, context, match_rule_set)
+                   if isinstance(child, dict) else (None, {"invalid child rule"})
+                   for child in children]
+        values = [value for value, _ in matches]
+        unsupported.update(problem for _, problems in matches for problem in problems)
+        if mode == "and":
+            matched = False if False in values else (None if None in values else True)
+        else:
+            matched = True if True in values else (None if None in values else False)
+        supported = {"type", "mode", "rules"}
+    else:
+        checks: list[bool | None] = []
+        address_checks: list[bool | None] = []
+        supported = {
+            "type", "clash_mode", "protocol", "network", "ip_version", "port",
+            "port_range", "inbound", "source_port", "source_port_range",
+            "ip_cidr", "ip_is_private", "source_ip_cidr", "source_ip_is_private",
+            "domain", "domain_suffix", "domain_keyword", "domain_regex", "rule_set",
+        }
+        for key, context_key in (
+            ("clash_mode", "mode"), ("protocol", "protocol"), ("network", "network"),
+            ("ip_version", "ip_version"), ("inbound", "inbound"),
+        ):
+            if key in rule:
+                checks.append(context.get(context_key) in as_list(rule[key]))
+        scope_checks = list(checks)
+        mixed_rule_set = "rule_set" in rule and bool(set(rule) & {
+            "domain", "domain_suffix", "domain_keyword", "domain_regex", "ip_cidr",
+            "ip_is_private", "source_ip_cidr", "source_ip_is_private", "port", "port_range",
+            "source_port", "source_port_range",
+        })
+        for key, range_key in (("port", "port_range"), ("source_port", "source_port_range")):
+            if key not in rule and range_key not in rule:
+                continue
+            port = context.get(key)
+            if port is None:
+                checks.append(None)
+                unsupported.add("missing " + key)
+                continue
+            match = port in as_list(rule.get(key))
+            for value in as_list(rule.get(range_key)):
+                try:
+                    start, end = str(value).split(":", 1)
+                    match |= int(start or 0) <= port <= int(end or 65535)
+                except ValueError:
+                    unsupported.add("invalid port range")
+                    checks.append(None)
+            checks.append(match)
+        for prefix, context_key in (("", "destination_ip"), ("source_", "source_ip")):
+            cidr_key, private_key = prefix + "ip_cidr", prefix + "ip_is_private"
+            if cidr_key not in rule and private_key not in rule:
+                continue
+            address = context.get(context_key)
+            if address is None:
+                # Domain-only probes carry no resolved destination address.
+                if prefix:
+                    checks.append(None)
+                    unsupported.add("missing source IP")
+                else:
+                    address_checks.append(False)
+                continue
+            ip = ipaddress.ip_address(address)
+            match = rule.get(private_key) is True and (not ip.is_global or ip.is_multicast)
+            try:
+                match |= any(ip in ipaddress.ip_network(cidr, strict=False)
+                             for cidr in as_list(rule.get(cidr_key)))
+            except ValueError:
+                unsupported.add("invalid IP prefix")
+                checks.append(None)
+            (checks if prefix else address_checks).append(match)
+        domains: list[bool] = []
+        domain = context.get("domain", "").lower().rstrip(".")
+        for key in ("domain", "domain_suffix", "domain_keyword", "domain_regex"):
+            if key not in rule:
+                continue
+            values = list(string_values(rule[key]))
+            if key == "domain":
+                domains.append(domain in [value.lower().rstrip(".") for value in values])
+            elif key == "domain_suffix":
+                domains.append(any(domain == value.lower().strip(".")
+                                   or domain.endswith("." + value.lower().strip("."))
+                                   for value in values))
+            elif key == "domain_keyword":
+                domains.append(any(value.lower() in domain for value in values))
+            else:
+                try:
+                    domains.append(any(re.search(value, domain) is not None for value in values))
+                except re.error:
+                    unsupported.add("invalid domain regexp")
+                    checks.append(None)
+        if domains:
+            address_checks.append(any(domains))
+        if mixed_rule_set:
+            # Core merges rule-set address/port groups with outer conditions.
+            # The CLI's standalone matcher cannot reconstruct that merge.
+            checks = scope_checks + [None]
+            unsupported.add("mixed rule-set address/port conditions")
+        elif address_checks:
+            checks.append(True if True in address_checks else
+                          (None if None in address_checks else False))
+        # Cheap scope mismatches also make an unknown condition irrelevant.
+        if False not in checks and "rule_set" in rule and not mixed_rule_set:
+            checks.append(any(match_rule_set(tag, context)
+                              for tag in string_values(rule["rule_set"])))
+        matched = False if False in checks else (None if None in checks else True)
+    action_fields = {
+        "action", "outbound", "invert", "no_drop", "method", "sniffer", "timeout",
+        "strategy", "udp_disable_domain_unmapping", "udp_connect", "udp_timeout",
+    }
+    unsupported.update(set(rule) - supported - action_fields)
+    if matched is not False and unsupported:
+        matched = None
+    if matched is not None and rule.get("invert"):
+        matched = not matched
+    return matched, unsupported
+
+
+def evaluate_route(
+    doc: dict[str, Any], context: dict[str, Any],
+    match_rule_set: Callable[[str, dict[str, Any]], bool],
+) -> tuple[str | None, list[str]]:
+    """Evaluate known packet metadata; this does not run DNS or a proxy core."""
+    continued: list[str] = []
+    for rule in (doc.get("route") or {}).get("rules", []):
+        if not isinstance(rule, dict):
+            raise ProbeUnsupported("invalid route rule")
+        matched, unsupported = _route_rule_match(rule, context, match_rule_set)
+        if matched is None:
+            raise ProbeUnsupported("unsupported route condition: " + ", ".join(sorted(unsupported)))
+        if not matched:
+            continue
+        action = rule.get("action", "route")
+        if action in {"sniff", "route-options"}:
+            continued.append(action)
+            continue
+        if action == "resolve":
+            if not context.get("destination_ip"):
+                raise ProbeUnsupported("resolve action needs an explicit destination IP")
+            continued.append(action)
+            continue
+        if action in {"reject", "hijack-dns"}:
+            return action, continued
+        if action == "route" and isinstance(rule.get("outbound"), str):
+            return rule["outbound"], continued
+        raise ProbeUnsupported("unsupported route action")
+    return (doc.get("route") or {}).get("final"), continued
 
 
 def route_probe(
-    doc: dict[str, Any], sing_box: Path | None, paths: dict[str, Path]
+    doc: dict[str, Any], sing_box: Path | None, paths: dict[str, Path],
+    *, scenarios: Iterable[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Evaluate domain rule-set order without starting a proxy process."""
+    """Evaluate explicit mode/protocol/IP scopes without starting a proxy."""
     if sing_box is None:
         return []
+    if scenarios is None:
+        cases = [{"domain": domain, "expected": expected} for domain, expected in ROUTE_PROBES]
+        for mode, target in (("direct", "direct"), ("global", "🛩️ NodeSelected")):
+            for domain in ("api.openai.com", "api.anthropic.com", "gemini.google.com",
+                           "google.cn", "cn.bing.com", "www.apple.com.cn", "www.bilibili.com"):
+                cases.append({"domain": domain, "mode": mode, "expected": target})
+            cases.append({"domain": "browser-intake-datadoghq.com", "mode": mode,
+                          "expected": "🌱 Purification"})
+        cases.extend([
+            {"domain": "login.weixin.qq.com", "protocol": "quic", "network": "udp",
+             "expected": "🇨🇳 China"},
+            {"domain": "gemini.google.com", "protocol": "quic", "network": "udp",
+             "expected": "🤖 AI"},
+            {"domain": "unlisted.invalid", "protocol": "quic", "network": "udp",
+             "expected": "reject"},
+            *({"domain": "unlisted.invalid", "destination_ip": "223.5.5.5", "mode": mode,
+               "expected": target} for mode, target in (
+                   ("rule", "🇨🇳 China"), ("direct", "direct"), ("global", "🛩️ NodeSelected"))),
+        ])
+    else:
+        cases = list(scenarios)
+    inbound = next((item.get("tag") for item in doc.get("inbounds", [])
+                    if item.get("type") == "tun"), "tun-in")
+    cache: dict[tuple[str, str], bool] = {}
+
+    def match(tag: str, context: dict[str, Any]) -> bool:
+        address = context.get("destination_ip", "") if tag.startswith("geoip-") else context["domain"]
+        key = (tag, address)
+        if key not in cache:
+            cache[key] = route_rule_set_match(sing_box, paths, tag, context["domain"],
+                                             destination_ip=context.get("destination_ip"))
+        return cache[key]
+
     rows: list[dict[str, Any]] = []
-    rules = (doc.get("route") or {}).get("rules") or []
-    for domain, expected in ROUTE_PROBES:
-        actual: str | None = None
-        for rule in rules:
-            if not isinstance(rule, dict):
-                continue
-            if rule.get("clash_mode"):
-                continue
-            tags = [tag for tag in string_values(rule.get("rule_set")) if tag in paths]
-            if tags and not any(route_rule_set_match(sing_box, paths, tag, domain) for tag in tags):
-                continue
-            if not tags:
-                keywords = list(string_values(rule.get("domain_keyword")))
-                if keywords and not any(keyword in domain for keyword in keywords):
-                    continue
-                if not keywords:
-                    continue
-            if rule.get("action") == "reject":
-                actual = "reject"
-            elif rule.get("action") == "route":
-                actual = next(iter(outbound_refs(rule)), None)
-            if actual:
-                break
-        rows.append({"domain": domain, "actual": actual, "expected": expected})
+    for scenario in cases:
+        row = {"domain": "", "mode": "rule", "protocol": "tls", "network": "tcp",
+               "port": 443, "ip_version": 4, "inbound": inbound, **scenario}
+        if row.get("destination_ip"):
+            row["ip_version"] = ipaddress.ip_address(row["destination_ip"]).version
+        try:
+            row["actual"], row["continued_actions"] = evaluate_route(doc, row, match)
+        except (ProbeUnsupported, RuntimeError, ValueError) as error:
+            row["actual"] = None
+            row["error"] = str(error)
+        rows.append(row)
     return rows
 
 
@@ -1073,6 +1272,9 @@ def main(argv: list[str] | None = None) -> int:
     mode_rows: dict[str, list[dict[str, Any]]] = {
         path.name: run_mode_probes(document) for path, document in documents
     }
+    for label, rows in mode_rows.items():
+        if any(not row["ok"] for row in rows):
+            result.fail(f"mode probe mismatch: {label}")
     if not args.skip_remote:
         rule_paths = download_rule_sets(
             [document for _, document in documents], run_dir, result
@@ -1087,7 +1289,7 @@ def main(argv: list[str] | None = None) -> int:
             for path, document in documents:
                 route_rows[path.name] = route_probe(document, sing_box, rule_paths)
                 for row in route_rows[path.name]:
-                    if row["actual"] != row["expected"]:
+                    if row.get("error") or row["actual"] != row["expected"]:
                         result.fail(f"route probe mismatch: {path.name} / {row['domain']}")
     else:
         result.warn("remote rule-set checks skipped")

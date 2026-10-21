@@ -870,14 +870,15 @@ def find_sing_box(explicit: str | None) -> Path | None:
     env_path = os.environ.get("SING_BOX_BIN")
     if env_path:
         candidates.append(Path(env_path))
-    candidates.append(
-        REPO_ROOT
-        / "sing-box"
-        / ".tmp"
-        / "tools"
-        / "sing-box-1.14.2-darwin-arm64"
-        / "sing-box"
-    )
+    for version in ("1.14.3", "1.14.2"):
+        candidates.append(
+            REPO_ROOT
+            / "sing-box"
+            / ".tmp"
+            / "tools"
+            / f"sing-box-{version}-darwin-arm64"
+            / "sing-box"
+        )
     candidates.append(
         REPO_ROOT
         / "sing-box"

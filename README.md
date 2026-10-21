@@ -45,18 +45,21 @@ template edits do not change a converter's remote copy. The current local
 profile and running SFM configuration include the native listeners without
 changing their existing node policies.
 
-For iCloud updates, inspect both
-`~/Library/Mobile Documents/iCloud~io~nekohasekai~sfamt/Documents` and the
-legacy `iCloud~io~nekohasekai~sfavt/Documents` directory. They are different
-application containers, not reliable macOS/iOS labels. Identify the profile
-file used on each device, back up each destination, preserve its own real
-nodes, IPv4/IPv6 track and TUN stack, then validate and read back each write.
-Shared files keep the loopback listener and use the interface-bound wildcard
-LAN listener, avoiding a bind to another device's fixed IP. iCloud file
-profiles do not refresh from repository templates automatically, and a local
-readback does not confirm delivery to the iPhone. The 10 existing JSON
-profiles in both containers are updated individually; their nodes and
-platform-specific DNS, routing, IPv4/IPv6 track and TUN stack are preserved.
+iCloud file profiles do not refresh from repository templates automatically.
+`~/Library/Mobile Documents/iCloud~io~nekohasekai~sfamt/Documents` is read by
+SFM standalone on this Mac; `iCloud~io~nekohasekai~sfavt/Documents` is read by
+the App Store client on the iPhone (that client is not installed on this Mac).
+Render every profile in both containers from the shipped templates with
+`scripts/render_singbox_profiles.py` instead of patching it. The profile name
+sets the track: names ending in `-IPv4Only` use the explicit v4 template, and
+every other name uses the IPv6-preferred default. `Select` names get selector
+country groups and `Auto` names URL tests; a name with neither keeps its current
+kind. Only the profile's nodes, country
+and provider group membership (including manually added nodes), valid
+selections and TUN stack carry over, so a stale track, DNS or route rule cannot
+survive a re-render. macOS profiles use the `country-auto` family with the
+loopback and interface-bound LAN listeners; iPhone profiles use
+`country-select-ios`. A local readback does not confirm delivery to the iPhone.
 
 Before refreshing or activating an SFM profile, decode `selected_profile_id`
 with SFM's BinaryCodable format. In SFM 1.14.2, `00 06` is Optional<Int64>(3),
@@ -288,6 +291,23 @@ python3 scripts/validate_singbox_subscription.py \
   --sing-box "$SINGBOX_CLI"
 ```
 
+Render local iCloud profiles into the draft directory; the renderer validates
+each one (structure, policy, track and a warning-free `sing-box check`), writes
+only drafts that pass, and exits non-zero on a failure. `--check` instead
+reports any profile that differs from its rendering. Repeat `--profile` for
+every file in a container:
+
+```sh
+SFAMT="$HOME/Library/Mobile Documents/iCloud~io~nekohasekai~sfamt/Documents"
+SFAVT="$HOME/Library/Mobile Documents/iCloud~io~nekohasekai~sfavt/Documents"
+python3 scripts/render_singbox_profiles.py --platform macos \
+  --output-dir "$SINGBOX_RUN_DIR/profiles/sfamt" --sing-box "$SINGBOX_CLI" \
+  --profile "$SFAMT/<Provider>-Select" --profile "$SFAMT/<Provider>-Select-IPv4Only"
+python3 scripts/render_singbox_profiles.py --platform ios \
+  --output-dir "$SINGBOX_RUN_DIR/profiles/sfavt" --sing-box "$SINGBOX_CLI" \
+  --profile "$SFAVT/<Provider>-Select.json"
+```
+
 If that URL still reads the old published GitHub template, a pass establishes
 only the subscription chain and real-node baseline. Expand the draft with the
 matching real nodes and validate that candidate separately. Do not describe
@@ -297,9 +317,9 @@ and a fresh final-URL check confirm it.
 ## Configuration update SOP
 
 1. Identify the actual selected SFM profile and source. Inventory all 12
-   templates and JSON profiles in both iCloud containers. Back up each file,
-   record its SHA-256, real-node identities and valid selections, and preserve
-   its IPv4/IPv6 track, TUN stack and platform differences. Keep private backups
+   templates and JSON profiles in both iCloud containers. Back up each file and
+   record its SHA-256, real-node identities and valid selections. Its track
+   follows its name and its platform follows its container. Keep private backups
    and expanded drafts in an ignored run directory with files mode `0600`.
 2. Build drafts, review the policy diff and repeat generation. Check for stale
    selector references, populated countries, AI paths limited to its four

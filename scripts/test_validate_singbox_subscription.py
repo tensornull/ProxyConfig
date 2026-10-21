@@ -506,5 +506,74 @@ class RouteProbeTests(unittest.TestCase):
         self.assertIn("unavailable", rows[0]["error"])
 
 
+SCUTIL_TAILSCALE = """DNS configuration
+
+resolver #1
+  search domain[0] : tail0000.ts.net
+  nameserver[0] : 100.100.100.100
+  if_index : 23 (utun4)
+  flags    : Supplemental, Request A records, Request AAAA records
+
+resolver #2
+  nameserver[0] : 172.19.0.2
+  if_index : 27 (utun5)
+"""
+SCUTIL_SFM = """DNS configuration
+
+resolver #1
+  nameserver[0] : 172.19.0.2
+  nameserver[1] : fdfe:dcba:9876::2
+  if_index : 27 (utun5)
+  flags    : Request A records, Request AAAA records
+
+resolver #2
+  domain   : local
+  options  : mdns
+"""
+SCUTIL_ROUTER = """DNS configuration
+
+resolver #1
+  nameserver[0] : 192.168.31.1
+  if_index : 15 (en0)
+"""
+
+
+class DnsBypassProbeTests(unittest.TestCase):
+    def test_primary_resolver_reads_only_resolver_one(self):
+        self.assertEqual(probes.primary_resolver(SCUTIL_TAILSCALE),
+                         {"nameservers": ["100.100.100.100"], "interface": "utun4"})
+        self.assertEqual(probes.primary_resolver(SCUTIL_SFM)["interface"], "utun5")
+
+    def test_resolver_outside_sfm_fails_and_sfm_resolver_passes(self):
+        for text, tun, failed, on_tun in ((SCUTIL_TAILSCALE, True, True, False),
+                                          (SCUTIL_ROUTER, True, True, False),
+                                          (SCUTIL_SFM, True, False, True),
+                                          (SCUTIL_ROUTER, False, False, False)):
+            with self.subTest(resolver=probes.primary_resolver(text)["nameservers"][0], tun=tun):
+                result = probes.CheckResult()
+                state = probes.check_primary_resolver(result, text, tun)
+                self.assertEqual(bool(result.failures), failed)
+                self.assertEqual(state["on_sfm_tun"], on_tun)
+
+    def test_foreign_names_must_get_fakeip_answers_while_sfm_owns_dns(self):
+        def answers(*addresses):
+            return [(probes.socket.AF_INET6 if ":" in a else probes.socket.AF_INET,
+                     probes.socket.SOCK_STREAM, 6, "", (a, 443)) for a in addresses]
+
+        self.assertTrue(probes.is_fakeip("198.18.1.66"))
+        self.assertTrue(probes.is_fakeip("2001:2::12"))
+        self.assertFalse(probes.is_fakeip("104.244.42.197"))
+        with patch.object(probes.socket, "getaddrinfo", return_value=answers("104.244.42.197")):
+            result = probes.CheckResult()
+            rows = probes.run_dns_probes(result, ["google.com", "taobao.com"], expect_fakeip=True)
+        self.assertEqual([row["ok"] for row in rows], [False, True])
+        self.assertEqual(len(result.failures), 1)
+        with patch.object(probes.socket, "getaddrinfo", return_value=answers("198.18.0.5", "2001:2::5")):
+            result = probes.CheckResult()
+            rows = probes.run_dns_probes(result, ["google.com"], expect_fakeip=True)
+        self.assertTrue(rows[0]["fakeip"])
+        self.assertEqual(result.failures, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -59,9 +59,12 @@ Use this skill for `ProxyConfig/sing-box` subscription conversion work.
 - Cover rule/direct/global modes, AI/ad and China/service intersections, Steam,
   media, fallback, v4/v6, FakeIP, QUIC, ads, LAN structure, infrastructure and
   Tailscale. Label OS/TUN, physical LAN and iPhone validation limits explicitly.
-- Preserve per-profile nodes, selections, IPv4/IPv6 track and TUN stack when
-  updating both iCloud containers. Recheck hashes before writing, stop on races
-  or uncertain writes, and read back/validate each destination. File-only work
+- Render both iCloud containers with `scripts/render_singbox_profiles.py`
+  (`sfamt` → `--platform macos`, `sfavt` → `--platform ios`). The name sets the
+  track: `-IPv4Only` uses the v4 template, every other name the IPv6-preferred
+  default. Nodes, group membership, valid selections and TUN stack carry over.
+  Recheck hashes before writing, stop on races or uncertain writes, and read
+  back/validate each destination. File-only work
   must not activate, restart, refresh or change SFM modes/selections.
 - A 204 from 1.14.3 `PUT /configs` is not a reload; see the source link in
   `README.md`. Keep the external Tailscale client and identity this iteration.

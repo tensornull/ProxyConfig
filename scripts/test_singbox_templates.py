@@ -120,6 +120,14 @@ DNS_PROBES = (
     "google.com",
     "api.openai.com",
 )
+# Foreign names must get FakeIP answers while SFM owns the system resolver;
+# a real or poisoned answer means TUN connections reach proxies as IP literals.
+FOREIGN_DNS_PROBES = ("google.com", "api.openai.com")
+TAILSCALE_QUAD100 = "100.100.100.100"
+FAKEIP_NETWORKS = (
+    ipaddress.ip_network(FAKEIP_INET4_RANGE),
+    ipaddress.ip_network(FAKEIP_INET6_RANGE),
+)
 
 
 class CheckResult:
@@ -1049,13 +1057,24 @@ def run_network_probes(
     return rows
 
 
-def run_dns_probes(result: CheckResult, hosts: list[str]) -> list[dict[str, Any]]:
+def is_fakeip(address: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return False
+    return any(ip in network for network in FAKEIP_NETWORKS)
+
+
+def run_dns_probes(result: CheckResult, hosts: list[str], *,
+                   expect_fakeip: bool = False) -> list[dict[str, Any]]:
     """Resolve representative names through the host's active resolver.
 
     This intentionally uses the system resolver rather than assuming that a
     particular SFM DNS listener is reachable.  The result is useful alongside
     ``scutil --dns``/Tailscale inspection and avoids printing returned address
-    lists in the terminal; the report records only address-family counts.
+    lists in the terminal; the report records only address-family counts and
+    whether every answer is synthetic.  With ``expect_fakeip`` (SFM owns the
+    system resolver) a foreign name with a real answer is a failure.
     """
     rows: list[dict[str, Any]] = []
     for host in hosts:
@@ -1071,9 +1090,14 @@ def run_dns_probes(result: CheckResult, hosts: list[str]) -> list[dict[str, Any]
                 "ipv4": int("ipv4" in families),
                 "ipv6": int("ipv6" in families),
             }
+            row["fakeip"] = bool(answers) and all(is_fakeip(info[4][0]) for info in answers)
             row["ok"] = bool(families)
             if not row["ok"]:
                 result.fail(f"DNS probe returned no addresses: {host}")
+            elif expect_fakeip and host in FOREIGN_DNS_PROBES and not row["fakeip"]:
+                row["ok"] = False
+                result.fail(f"DNS probe bypassed FakeIP: {host} got a real address, so "
+                            "TUN connections reach proxies as IP literals")
         except Exception as exc:  # noqa: BLE001 - keep report non-sensitive
             row["ok"] = False
             row["error"] = type(exc).__name__
@@ -1120,6 +1144,39 @@ def run_mode_probes(doc: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def primary_resolver(scutil_dns: str) -> dict[str, Any]:
+    """Return resolver #1's nameservers and interface from ``scutil --dns``."""
+
+    block = re.split(r"\n\s*resolver #2\b|\nDNS configuration \(for scoped", scutil_dns)[0]
+    interface = re.search(r"if_index\s*:\s*\d+\s*\((\S+)\)", block)
+    return {
+        "nameservers": re.findall(r"nameserver\[\d+\]\s*:\s*(\S+)", block),
+        "interface": interface.group(1) if interface else None,
+    }
+
+
+def check_primary_resolver(result: CheckResult, scutil_dns: str, tun_present: bool) -> dict[str, Any]:
+    """Fail when app DNS cannot reach SFM's FakeIP server.
+
+    sing-box 1.14 cannot rewrite a sniffed connection's destination, so an
+    answer from another resolver (Tailscale's Quad100 or a LAN router) is sent
+    to the proxy as an IP literal; a poisoned answer then fails on every node
+    that does not re-resolve server-side.
+    """
+
+    resolver = primary_resolver(scutil_dns)
+    quad100 = TAILSCALE_QUAD100 in resolver["nameservers"]
+    on_tun = bool(resolver["interface"]) and resolver["interface"].startswith("utun") and not quad100
+    if quad100:
+        result.fail("system resolver #1 is Tailscale Quad100; turn off Tailscale "
+                    "accept-dns so app DNS reaches SFM FakeIP")
+    elif not tun_present:
+        result.warn("no TUN interface; SFM resolver checks skipped")
+    elif not on_tun:
+        result.fail("system resolver #1 is not on the SFM TUN; app DNS bypasses FakeIP")
+    return {"is_tailscale_quad100": quad100, "on_sfm_tun": on_tun and tun_present}
+
+
 def run_macos_environment(result: CheckResult) -> dict[str, Any]:
     """Capture routing/DNS facts relevant to TUN and Tailscale bypasses."""
 
@@ -1133,6 +1190,7 @@ def run_macos_environment(result: CheckResult) -> dict[str, Any]:
         "interfaces": ["ifconfig"],
     }
     outputs: dict[str, Any] = {"platform": "Darwin"}
+    texts: dict[str, str] = {}
     for name, command in commands.items():
         try:
             proc = subprocess.run(
@@ -1143,7 +1201,7 @@ def run_macos_environment(result: CheckResult) -> dict[str, Any]:
                 timeout=10,
                 check=False,
             )
-            text = proc.stdout
+            text = texts[name] = proc.stdout
             # Keep the report useful without copying resolver addresses or
             # unrelated interface payloads into the terminal output.
             lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -1158,6 +1216,9 @@ def run_macos_environment(result: CheckResult) -> dict[str, Any]:
         except (OSError, subprocess.SubprocessError) as exc:
             outputs[name] = {"error": type(exc).__name__}
             result.warn(f"macOS environment command failed: {name}")
+    if "dns" in texts:
+        outputs["primary_resolver"] = check_primary_resolver(
+            result, texts["dns"], bool(outputs.get("interfaces", {}).get("has_tun")))
     return outputs
 
 
@@ -1201,7 +1262,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--macos-environment",
         action="store_true",
-        help="record scutil/route/networksetup facts relevant to TUN and Tailscale",
+        help="record scutil/route/networksetup facts and fail when app DNS bypasses SFM",
     )
     parser.add_argument(
         "--dns-host",
@@ -1297,12 +1358,15 @@ def main(argv: list[str] | None = None) -> int:
     network_rows: list[dict[str, Any]] = []
     if args.network_probes:
         network_rows = run_network_probes(result, args.ipv6_hosts, args.ipv4_hosts)
-    dns_rows: list[dict[str, Any]] = []
-    if args.dns_probes or args.network_probes:
-        dns_rows = run_dns_probes(result, args.dns_hosts)
     macos_environment = (
         run_macos_environment(result) if args.macos_environment else {}
     )
+    dns_rows: list[dict[str, Any]] = []
+    if args.dns_probes or args.network_probes:
+        dns_rows = run_dns_probes(
+            result, args.dns_hosts,
+            expect_fakeip=macos_environment.get("primary_resolver", {}).get("on_sfm_tun", False),
+        )
 
     report = {
         "templates": [path.name for path, _ in documents],
